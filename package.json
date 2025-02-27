@@ -1,0 +1,23 @@
+{
+  "name": "public-zenn-repo",
+  "version": "1.0.0",
+  "description": "--- date: 2025-02-28 modified: 2025-02-28 tags: type/zenn aliases:   - Zenn README   - Zenn 原稿公開リポジトリ ---",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/icecofffeee/public-zenn-repo.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/icecofffeee/public-zenn-repo/issues"
+  },
+  "homepage": "https://github.com/icecofffeee/public-zenn-repo#readme",
+  "dependencies": {
+    "zenn-cli": "^0.1.158"
+  }
+}
