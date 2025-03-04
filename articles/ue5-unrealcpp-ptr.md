@@ -75,17 +75,14 @@ UnrealEngine によって管理されるメモリ領域を指すポインタで�
 | ---- | ---- | ---- |
 | `UPROPERTY() Ubject* Pointer{};` | ハードオブジェクトポインタ | 古い書き方で今どき使わない。`TObjectPtr`使え |
 | `UPROPERTY() TObjectPtr<UObject> Pointer;` | オブジェクトポインタ | ハードオブジェクトポインタの進化版。基本はこれ。 |
-| `UPROPERTY() TWeakObjectPtr<UObject> Pointer;` | ウィークブジェクトポインタ | `TObjectPtr`の所有権を持たない版 |
 | `UPROPERTY() TSoftObjectPtr<UObject> Pointer;` | ソフトオブジェクトポインタ | UE5独自のやわらかい参照(後述) |
+| `UPROPERTY() TWeakObjectPtr<UObject> Pointer;` | ウィークブジェクトポインタ | `TObjectPtr`の所有権を持たない版 |
+| `UPROPERTY() TStrongObjectPtr<UObject> Pointer;` | ストロングブジェクトポインタ | `TObjectPtr`の所有権を持つ版 |
 | `Ubject* Pointer{};` | ワイルドポインタ | UPROPERTY()としてリフレクションシステムに辿られない野生のポインタ。ダングリングポインタになる。バグなので直せ。`TObjectPtr`にしろ |
 
-:::message
-UEのオブジェクトポインタにユニークポインタとシェアードポインタはありません。なぜなら基本的に`UObject`参照は共有参照だからです。例外的に`TWeakObjectPtr`は所有権を持ちません。
-:::
-
 
 :::message
-UEのポインタには弱いのと柔らかいの二つあることを気に留めておいてください。
+UEのマネージドポインタには強弱と硬軟の二軸あることを気に留めておいてください。
 :::
 
 ### 特別なマネージドポインタ
@@ -93,7 +90,9 @@ UEのポインタには弱いのと柔らかいの二つあることを気に留
 | マネージド | 名前 | 補足 |
 | ---- | ---- | ---- |
 | `UPROPERTY() TScriptInterface<IMyInterface> Pointer;` | Nativeインターフェースへのポインタ | pure C++なinteface型を指すポインタ(後述) |
-| `UPROPERTY() TSubClassOf<UMyBase> Pointer;` | UCLASSへのポインタ | BP含め任意のUMyBase派生型を指すポインタ(後述) |
+| `UPROPERTY() TSubClassOf<UMyBase> Pointer;` | UCLASSへのポインタ | BP含め任意の`UMyBase`派生型を指すポインタ(後述) |
+| `UPROPERTY() TObjectPtr<AActor> Actor;` | `AActor`へのポインタ | BP含め任意の`AActor`派生型を指すポインタ(後述) |
+| `UPROPERTY() TObjectPtr<UActorComponent> Component;` | `UActorComponent`へのポインタ | BP含め任意の`UActorComponent`派生型を指すポインタ(後述) |
 
 
 # 詳解
@@ -108,7 +107,7 @@ UObject* Object = nullptr;
 pure C++と全く同じです。言及することはありません。
 今時のC++では使いませんし、UnrealEngineでも使いません。生ポはとにかくダングリングポインタになりやすいので、スマートポインタを使いましょう。
 
-関数の戻り値として生ポを返すことはあります。BP関数のように、ゲームスレッドで使われることが前提とされている関数では生ポでも良いのです。でも`TObjectPtr`使った方がいいと思います。
+関数の戻り値として生ポを返すことはあります。BP関数のように、ゲームスレッドで使われることが前提とされている関数では生ポでも良いのです。
 
 :::message alert
 生ポインタに`IsValid` を使ってはいけません。 `IsValid(UObject*)`は UPROPERTY()なハードオブジェクトポインタに対して使われるよう設計されております。
