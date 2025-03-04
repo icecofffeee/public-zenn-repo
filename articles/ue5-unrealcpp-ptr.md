@@ -2,7 +2,7 @@
 title: "UE5:Unreal Engineのポインタについてまとめた 前編"
 emoji: "⛳"
 type: "tech" # tech: 技術記事 / idea: アイデア
-topics: [ue5, cpp]
+topics: [ue5, cpp, unrealengine, unrealengine5]
 published: true
 ---
 
