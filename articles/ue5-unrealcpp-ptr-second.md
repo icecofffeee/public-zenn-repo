@@ -1,5 +1,5 @@
 ---
-title: "UE5:Unreal Engineのポインタについてまとめた 後編 "
+title: "UE5:Unreal Engineのポインタについてまとめた 中編 "
 emoji: "⛳"
 type: "tech" # tech: 技術記事 / idea: アイデア
 topics: [ue5, cpp, unrealengine, unrealengine5]
@@ -9,7 +9,7 @@ published: false
 # はじめに
 
 [UE5:Unreal Engineのポインタについてまとめた 前編](https://zenn.dev/allways/articles/ue5-unrealcpp-ptr) の続きです。
-後編では、マネージドポインタについて記載します。
+中編では、マネージドポインタについて記載します。
 
 # ポインタ一覧再掲
 
@@ -41,6 +41,9 @@ published: false
 | `UPROPERTY() TSubClassOf<UMyBase> Pointer;` | UCLASSへのポインタ | BP含め任意の`UMyBase`派生型を指すポインタ(後述) |
 | `UPROPERTY() TObjectPtr<AActor> Actor;` | `AActor`へのポインタ | BP含め任意の`AActor`派生型を指すポインタ(後述) |
 | `UPROPERTY() TObjectPtr<UActorComponent> Component;` | `UActorComponent`へのポインタ | BP含め任意の`UActorComponent`派生型を指すポインタ(後述) |
+| `UPROPERTY() TArray<TObjectPtr<UObject>> PointerArray;` | `TArray`の中のポインタ | コンテナの中のオブジェクトポインタ |
+| `UPROPERTY() TMap<TObjectPtr<UObject>, TObjectPtr<UObject>> PointerMap;` | `TMap`の中のポインタ | コンテナの中のオブジェクトポインタ |
+| `UPROPERTY() TSet<TObjectPtr<UObject>> PointerSet;` | `TSet`の中のポインタ | コンテナの中のオブジェクトポインタ |
 
 # 詳解
 
@@ -88,29 +91,45 @@ class UMyObject : public UObject
 ### Hard Object Pointerの使い方
 使いませんが、一応使い方について述べます。
 
-#### デリファレンス
+#### Hard Object Pointerのデリファレンス
 デリファレンスするときは必ず `IsValid()`を用いて死活チェックしてから利用します。どこで`MarkAsGarbage`されるか分からないので、基本的に`IsValid()`した方が安全です。ゲーム内に限らず、エディター、テストコード、プロファイリングなど`MarkAsGarbage`で破棄したくなるタイミングはちらほら出てきますから、油断なりません。特にエディタ上でAssetを`Force Delete`したときや、レベルからアクターを`Delete`したときが危ないです。そのアセットへのハード参照はnullptrにセットされますが、Slateでキャプチャしたりすると、タイミングによっては怪しいことになります。ワイルドな参照はダングリングポインタになります。
 
-パフォーマンス稼ぎのために`IsValid()`を外したくなるときがありますが、クラッシュすると時間を奪われるので個人的にお勧めしてません。
 ```cpp
 if(IsValid(Pointer))
 {
     Pointer->DoSomething();
 }
 ```
-#### 生成
+パフォーマンス稼ぎのために`IsValid()`を外したくなるときがありますが、クラッシュすると時間を奪われるので個人的にお勧めしてません。
+
 ```cpp
-    UObject* Object = NewObject<UObject>();
     Object->MarkAsGarbage(); // どこかでゴミマークされたとする
     //...
 
-    // まだ GCが走っていないとすると、
-    // operator bool や == nullptr はあんまり良くない
+    // まだ GCが走っていない状態では
+    // operator bool や == nullptr は
     // MarkAsGarbageなオブジェクトに対して trueを返してしまう
-    if(Object != nullptr){}
+    if(Object != nullptr){} // 非nullptrだからゴミだけどアクセスしちゃうよ
     if(Object){}  // 非nullptrだからゴミだけどアクセスしちゃうよ
 ```
-#### 破棄
+#### Hard Object Pointerの生成
+NewObjectで作ります。
+```cpp
+    UObject* Object = NewObject<UObject>();
+```
+作りたての状態では、参照チェインに含まれていないので、どこかのUPROPERTYに参照させておかねばなりません。
+```cpp
+    UObject* Object = NewObject<UObject>();
+    this->Pointer = Object;
+```
+もしくは RootSet に明示的に登録するかです。
+
+```cpp
+    UObject* Object = NewObject<UObject>();
+    Object->AddToRoot();
+```
+
+#### Hard Object Pointerの破棄
 マネージドなので破棄はGC回収を期待します。参照を外すときは素直に`nullptr`をセットします。GC回収を遅延させないように明示的にnullptr代入をすることが大事です。親(Outer)からthisへの参照が残っていたとしてもthisから`Pointer`への参照を明示的に外しておけば`UObject`が1つ早期に回収されることが期待されます。
 ```cpp
 void ReleaseReference()
@@ -143,7 +162,6 @@ void ReleaseReference()
 `ConditionalBeginDestroy`はすぐさま`BeginDestroy`を呼び出そうとするので危険です。ライフサイクルを守らないので、UEのプロじゃない限り使わない方がいいです。
 ※ `AActor`と `UActorComponent`の破棄は別(後述)
 
-
 ### Hard Object Pointerの注意点
 #### アセットを消すとnullptrになる
 `UPROPERTY() UObject*` が何らかのアセットを参照している場合、エディタ上でそのアセットを `Force Delete`した場合 nullptrにセットされます。そのため、アセットを参照したい場合はnullptrになり得ることを前提に実装しなければなりません。Slateや UEditorSubsystem とかエディタ周りでアセット参照を握る場合は気を付けましょう。
@@ -166,12 +184,12 @@ class UMyObject : public UObject
 `TObjectPtr` は生のアドレスではなく内部でオブジェクトへのハンドルとして持っています。パッケージビルドされた段階で生ポインタに変換されます。`sizeof(TObjectPtr<T>)`は生ポと同じです。なので値渡しでOKです。
 
 `TObjectPtr` は Incremental Garbage Collection に対応しています。
-ユーザーコード側で全てハードオブジェクトポインタを `TObjectPtr`に置き換えられるなら Incremental GCを利用することができます。
+ユーザーコード側で全てのハードオブジェクトポインタを `TObjectPtr`に置き換えられるなら Incremental GCを利用することができます。
 
 また、`TObjectPtr`はCook時に遅延ロードに対応しているため、Cook時間の面において有利です。
 
 ### TObjectPtrの使い方
-#### デリファレンス
+#### TObjectPtrのデリファレンス
 `T*`をデリファレンスしたいときは `GetValid()`を使って生ポにします。ifスコープの利用が賢明です。これは何回も`operator ->`や`operator *`を利用するのは無駄だからです。`ResolveObjectHandle`の呼び出しもその都度行われます。
 ```cpp
 // GetValid<T>は IsValidなら T* を,さもなければnullptrを返すtemplate関数
@@ -180,25 +198,38 @@ if(T* Ptr = GetValid(Pointer))
     Ptr->DoSomething();
     Ptr->DoFooBar();
 
-    //何回も operator->を呼び出すのは無駄なので
+    //何回も operator->を呼び出すのは無駄です
     // Pointer->DoSomething(); 
     // Pointer->DoFooBar(); 
 }
 ```
 
-`operator bool`を利用してnullptr比較が可能です。
-ただし、前述の通り`T*`が生存していることに興味がある局面では`IsValid`を使う方が賢明です。
+`operator bool`を利用して`nullptr`比較が可能です。
+ただし、`T*`が生存していることに意味がある局面では`IsValid`を使う方が賢明です。
 ```cpp
-if(Pointer){ /* pointerは非nullptr だが Gargabeかはわからない*/ }
+if(Pointer){ /* pointerは非nullptr だが Garbageかはわからない*/ }
 if(IsValid(Pointer)){ /* pointerは非nullptr かつ Garbageでない*/ }
 ```
-#### 生成
-implicit に生ポから変換できます。普通にコンストラクタを使えばよいです。
+#### TObjectPtrの生成
+`implicit` に生ポから変換できます。`operator=`や普通にコンストラクタを使えばよいです。
 
 ```cpp
-TObjectPtr<UObject> Obj = NewObject<UObject>();
+UObject* RawPtr = NewObject<UObject>();
+
+TObjectPtr<UObject> Obj0 = RawPtr;
+TObjectPtr<UObject> Obj1(RawPtr); //生ポをはめることもできる
+TObjectPtr<UObject> Obj2(nullptr); //明示的なnullptrコンストラクタもあるよ
+TObjectPtr<UObject> Obj3(); //デフォルトコンストラクタはnullptr
 ```
-#### 破棄
+
+普通は`AActor`等のコンストラクタ内でセットするか、エディタのDetailsビューからセットすると思います。
+```cpp
+AMyActor::AMyActor()
+{
+    Pointer = CreateDefaultSubObject<T>(TEXT("Hogehoge"));
+}
+```
+#### TObjectPtrの破棄
 nullptr設定するだけです。これは`operator=(TYPE_OF_NULLPTR)`がちゃんと実装されているからです。
 
 ```cpp
@@ -207,9 +238,9 @@ void ReleaseReference()
     Pointer = nullptr;
 }
 ```
+Pointerが指すオブジェクトのGC回収を早めたいならnullptrをセットするのもありです。
 
-
-#### キャスト
+#### TObjectPtrのキャスト
 生ポインタと違って、`TObjectPtr`はテンプレートクラスです。なので型情報を保持しています。
 そのため`Cast`を型安全かつ`constexpr`に行えます。つまりコンパイル時に間違ったキャストを弾いてくれるのです。すばら。
 
@@ -238,7 +269,7 @@ void Main()
     }
 }
 ```
-#### 関数の引数・戻り値
+#### TObjectPtrの関数の引数・戻り値利用
 `TObjectPtr`は生ポ、ハードオブジェクトポインタよりも価値が高いので、このまま`return`してよいです。生ポと `TObjectPtr`のサイズは同じなので `TObjectPtr`を`return`して問題ありません。生ポはスコープを超えて使うべきでないので、`return`しないようにしましょう。
 
 ```cpp
@@ -288,7 +319,7 @@ UPROPERTY() TSoftObjectPtr<UObject> Pointer;
 
 ### TSoftObjectPtrの使い方
 
-#### 生成
+#### TSoftObjectPtrの生成
 普通は`UPROPERTY(EditDefaultsOnly)`にしてエディターから設定します。
 ```cpp
     UPROPERTY(EditDefaultsOnly)
@@ -303,7 +334,7 @@ void Main()
 }
 ```
 
-#### 破棄
+#### TSoftObjectPtrの破棄
 パスと弱参照しかもっていないので別に破棄する必要はありませんが、Resetで同じインスタンスを使いまわせます。
 ```cpp
 void Main()
@@ -313,7 +344,7 @@ void Main()
 }
 ```
 
-#### ロード
+#### TSoftObjectPtrのロード
 同期ロードはメンバメソッドを直接叩きます。ロード済みのインスタンス参照は自身で保持する必要があります。TSoftObjectPtrはロードしたものへの弱参照しかもっていないので、GC回収されちゃいます。
 ```cpp
 UPROPERTY(EditDefaultsOnly)
@@ -333,7 +364,7 @@ void Main()
 }
 ```
 
-#### 非同期ロード
+#### TSoftObjectPtrの非同期ロード
 非同期ロードは公式ドキュメントの通りです。
 [アセットの非同期ロード](https://dev.epicgames.com/documentation/ja-jp/unreal-engine/asynchronous-asset-loading-in-unreal-engine)
 
@@ -342,7 +373,7 @@ void Main()
 
 早くコルーチンか`TFuture`対応来てくれぇ!
 
-### 死活チェック
+### TSoftObjectPtrの死活チェック
 
 3種類あります。これは3状態を識別するものです。それぞれの状態は排他です。
 
@@ -352,9 +383,46 @@ void Main()
 
 有効なパスを指していないがロード済みという状態はありえません。
 
+```cpp
+TSoftObjectPtr Ptr = FSoftObjectPath("Game/Path/To/Asset");
+
+if(Ptr.IsNull()){} // パスが間違っている or パスが空文字
+
+if(Ptr.IsPending(){} // パスは合っている. 未ロード or ロード中
+
+if(Ptr.IsValid()){} // ロード完了
+
+```
+
 `UPROPERTY()`な`SoftObjectPtr`をちゃんとEditorから設定できているならば`IsPending()`となります。`IsValid()`は内部の`WeakObjectPtr`が活きている間は`true`を返すということなので、将来的にGC回収されたら`IsPending()`へと戻ります。`ResetWeakPtr()`で`IsValid()`から`IsPending()`へ明示的に戻せますが、普通そんなことしないでしょう。
 
+```cpp
+if(Ptr.IsValid())
+{
+    Ptr.ResetWeakPtr(); //内部の弱参照をResetしてIsPendingに戻す.
+    check(Ptr.IsPending());
+
+    //もいっかいロードしたら別インスタンスが得られる
+    UObject* Loaded2 = Ptr.LoadSynchronus(); 
+}
+
+```
+
 `IsValid()`は内部で`dynamic_cast`を用いており重めです。ロード完了したかどうかはロード済みのアセットの有無で確認した方が賢明でしょう。
+
+```cpp
+UPROEPRTY() TSoftObjectPath<UObject> SoftObjectPtr;
+UPROPERTY() TObjectPtr<UObject> Loaded;
+
+void BeginPlay()
+{
+    this->Loaded = SoftObjectPtr.LoadSynchronus();
+
+    if(SoftObjectPtr.IsValid()){} // これは少し重め
+
+    if(IsValid(Loaded)){} // ロード済みかどうかはロード済みObjectの死活チェックで良いよね
+}
+```
 
 ## TWeakObjectPtr
 UObjectのGCを妨げることがない弱参照です。
@@ -368,7 +436,7 @@ TWeakObjectPtr<UObject> WeakObject;
 GCを妨げないということで、有れば使い、なかったら使わないというようなニーズを満たすときに重宝します。
 
 ### TWeakObjectPtrの使い方
-#### 生成
+#### TWeakObjectPtrの生成
 `UObject*`や `TObjectPtr`、`TStrongObjectPtr`から暗黙的に変換できます。
 
 ```cpp
@@ -386,7 +454,7 @@ TWeakObjectPtr<UObject> WeakFromTObj = MakeWeakObjectPtr(Object);
 TWeakObjectPtr<UObject> WeakFromRaw = MakeWeakObjectPtr(RawPtr);
 ```
 
-#### 破棄
+#### TWeakObjectPtrの破棄
 `Reset`を使うか、`nullptr`をセットします。
 ```cpp
 TObjectPtr<UObject> Object = NewObject<UObject>();
@@ -395,7 +463,7 @@ Weak.Reset();
 Weak = nullptr;
 ```
 
-#### 死活チェック
+#### TWeakObjectPtrの死活チェック
 活きているかどうかに興味がある局面においては`IsValid()`を使用します。
 
 ```cpp
@@ -408,16 +476,36 @@ else
     UE_LOG(LogTemp, Display, TEXT("もう死んだか、最初からnullptrか、Staleした"));
 }
 ```
-`IsValid` には引数が2個ついています。bEvenIfPendingKill と bThreadSafeTestです。
+`IsValid` には引数が2個ついています。`bEvenIfPendingKill` と `bThreadSafeTest`です。
 
-`bEvenIfPendingKill=true`はガベージマーク済みな死んだオブジェクトを指していてもtrueを返します。有効なアドレスを指しているため、デリファレンスしてもメモリアクセスにはなりません。
+`bEvenIfPendingKill=true`はガベージマーク済みなゴミオブジェクトを指していてもtrueを返します。この段階では有効なアドレスを指しているため、デリファレンスしてもアクセス違反にはなりません。よくわからないなら`false`にしてください。
 
-`bThreadSafeTest=true`はGCの到達可能性チェックを行わず nullptrかどうかだけをチェックします。
-
+`bThreadSafeTest=true`はUObjectのルートからの到達可能性チェックを行わず`GObjectArray[i]`が`nullptr`かどうかだけをチェックします。GCのマークフェーズの間でも`nullptr`かチェックしたいときに使います。
 どちらも普通のユーザーは使いません。
 
+```cpp
+constexpr bool bEvenIfPendingKill = true;
+constexpr bool bThreadSafeTest = true;
+if(Weak.IsValid(bEvenIfPendingKill, bThreadSafeTest))
+{
+    // ゴミかもしれないが、メモリ領域は活きている
+}
+```
 
-#### デリファレンス
+ワーカースレッドから行える最強の死活チェックは`Pin`です。
+```cpp
+if(TStringObjectPtr Strong = Weak.Pin())
+{
+    // スレッドセーフにまだ活きていることが確実
+}
+else
+{
+    // すでに死んでいる
+}
+```
+
+
+#### TWeakObjectPtrのデリファレンス
 弱参照なのでいつ死ぬかわかりません。そのため使用する度にチェックする必要があります。
 基本的には `if`スコープで `Pin`もしくは`Get`を使います。
 ゲームスレッドで利用する場合は `Get`で問題ありません。
@@ -456,36 +544,41 @@ if(TStrongObjectPtr<UObject> Ptr = Weak.Pin())
 こちらは強参照であるため例えガベージマーク済みであっても、強参照が活きている限りGCを妨げます。通常使いません。
 
 ### `Pin`は スレッドセーフだが`T*`はスレッドセーフではない
-`WeakObjectPtr::Pin`はスレッドセーフです。GCに対してLockを取りつつ確実にIsValidな `TStrongObjectPtr`を取得できます。
+`WeakObjectPtr::Pin`はスレッドセーフです。GCに対してLockを取りつつ確実に`IsValid`な `TStrongObjectPtr`を取得できます。
 
-ですが、肝心の`T*`に関してはそれがスレッドセーフかどうかは実装によります。ほとんどのUObject派生型はスレッドセーフじゃありません。
+ですが、肝心の`T*`に関してはそれがスレッドセーフかどうかは実装によります。ほとんどの`UObject`派生型はスレッドセーフじゃありません。
 ```cpp
 if(T* Ptr = Weak.Pin())
 {
     Ptr->DoSometing_ConCurrent(); //自前でスレッドセーフな関数を実装するべし
-    int Value = Ptr->GetValue_ConCurrent(); //std::atomicやCriticalSection等で頑張るべし
+    int Value = Ptr->GetValue_ConCurrent(); //std::atomicやCriticalSection等でスレッドセーフにするべし
 }
 ```
 
-Slateの世界はUObject管理外なので、ラムダキャプチャしたUObjectがGCされてしまわないようにWeakObjectPtrで参照を引き回したり、StringObjectPtrで確実に所有権を握る必要がでてきます。Unreal Editor拡張を実装するにあたってSlateは避けて通れず、またUObjectも触らないわけにはいかないので、マネージドポインタを触る場合は特に気を付ける必要があります。
+`Slate`の世界は`UObject`管理外なので、ラムダキャプチャした`UObject`がGCされてしまわないように`WeakObjectPtr`で参照を引き回したり、`StrongObjectPtr`で確実に所有権を握る必要がでてきます。Unreal Editor拡張を実装するにあたって`Slate`は避けて通れず、また`UObject`も触らないわけにはいかないので、マネージドポインタを触る場合は特に気を付ける必要があります。
 
 
 ## TStrongObjectPtr
 マジの強いオブジェクト参照です。GCを必ず妨げます。`RefCounted`フラグを立てて、明示的な参照カウント方式に切り替えます。
-`Unreachable`フラグが立っている到達不可能なオブジェクトで合ってもGCを妨げます。
+たとえ`Unreachable`フラグが立っている到達不可能なオブジェクトであってもGCを妨げます。
 
 :::message
 参照カウント式なので、循環参照には十分気を付けてください。
 :::
 
-ゲーム内ではTObjectPtrで十分なので使うことはないでしょう。
+:::message
+強い参照なので後片付けを忘れないように注意してください。メンバー変数として保持するときは`EndPlay`等の適切なタイミングで `Reset()`する必要があります。
+:::
+
+ゲーム内では`TObjectPtr`で十分なので登場頻度は低いと思います。
+`TWeakObjectPtr`の`Pin`から得ることが大半でしょう。
 
 もっぱら Editor拡張で使われます。
 典型例はアセットのコンバートやバリデーション等です。処理中のアセットがGCされたり削除されると例外だすので、事前に強い参照を保持してから望むというものです。
 
 ### TStrongObjectPtrの使い方
 
-#### 生成
+#### TStrongObjectPtrの生成
 `WeakObjectPtr<T>::Pin` から貰います。もしくは明示的にコンストラクタを呼びます。
 ```cpp
 TObjectPtr<UObject> Obj = NewObject<UObject>();
@@ -494,7 +587,7 @@ TStrongObjectPtr<UObject> StrongFromObject(Obj);
 TStrongObjectPtr<UObject> StrongFromWeak = Weak.Pin();
 ```
 
-#### 破棄
+#### TStrongObjectPtrの破棄
 `Reset()`を呼び出すか, `nullptr`をセットします。
 参照カウント式なので確実に破棄しましょう。デストラクタで自動的に`Reset`されるためで一時変数などは大丈夫でしょう。
 メンバ変数に持つ場合は寿命が伸びる可能性があるので適切なライフスコープで破棄してください。
@@ -506,7 +599,7 @@ Strong = nullptr; // 参照カウントを減らし、内部ポインタをnullp
 ```
 全ての`TStrongObjectPtr`から解放されたオブジェクトは従来のマークアンドスイープ方式でGCされます。
 
-#### デリファレンス
+#### TStrongObjectPtrのデリファレンス
 `Get()`で取得します。強参照であるので、非nullptrであるのならば確実に活きています。
 そのため`operator->`や `operator*`を直接使っても問題ありません。覚えることを減らすためほかのポインタ同様`Get`を使えばいいと思います。
 
@@ -518,7 +611,7 @@ if(UObject* Ptr = Strong.Get())
 }
 ```
 
-#### 死活チェック
+#### TStrongObjectPtrの死活チェック
 `IsValid()`でチェックします。強参照であるので、非`nullptr`であるのならば確実に活きています。
 `Pin`止めが間に合わなかったときは`nullptr`が返るので必ず一度はチェックしましょう。
 チェック済みの`StringObjectPtr`は ずっと非`nullptr`なので以降のチェックは省けます。
@@ -534,8 +627,7 @@ else
 }
 ```
 
-
-### 詳しく
+### TStrongObjectPtr更に詳しく
 内部的に `UObject::AddRef`/`ReleaseRef()`を呼び出します。これにより、`EInternalObjectFlags::RefCounted`フラグが立ちます。
 このフラグは `EInternalObjectFlags_GarbageCollectionKeepFlags` に含まれているため、GCのスイープフェーズで回収されません。
 
@@ -551,14 +643,27 @@ class UMyObject : public UObject
 ```
 `UPROPERTY()`がついていないため、リフレクションシステムから辿ることができない野生のポインタです。このポインタが指すオブジェクトはIsValidなのかGC回収済みなのか全くわかりません。
 
-### 使い方
+### Wild Pointer の使い方
 ありません。使ってはいけません。ダンリングポインタになるのでクラッシュするか、最悪生動きします。
 
-### 死活チェック
+### Wild Pointer の死活チェック
 できません。`IsValid()`ではチェックできません。`IsValidLowLevel()`でもチェックできません。
 
-### 何故ダメか
+`IsValidLowLevel`は 活きているかのチェックではなく、ダングリングポインタの恐れがあるかのチェックに使用します。デバッグ用です。誤判定する可能性があるため、デリファレンスしてアクセスしてはいけません。
+```cpp
+if(!IsValidLowLevel(Object))
+{
+    // ログを出すなどの為に使用する
+    UE_LOG(LogTemp, Error, TEXT("ダングリングポインタかもしれない!!!!"));
+
+    // これはダメ↓ GetNameの呼び出しでクラッシュする可能性が高い
+    // UE_LOG(LogTemp, Error, TEXT("%s"), Obj->GetName());
+}
+```
+
+### Wild Pointer 何故ダメか
 このポインタを使ったときの最悪のシナリオとしては、GCに回収された無効オブジェクトが再利用されて有効な別のUObject派生型へと転生して使用されることです。
+低い可能性ではありますが、同一アドレスに別のUObjectが生まれる可能性があるのです。
 例：
 ```cpp
 UCLASS()
@@ -570,12 +675,13 @@ class AMyActor : public AActor
     {
         WildPrimitive = NewObject<PrimitiveComponent>();
 
-        // このスコープ内においてはまだ活きている！！！
+        // このスコープ内においてのみ活きていることが保障できる
     }
 
     void Tick()
     {
         // この時点で WildPrimitiveはもう死んでいる可能性がある
+        // ...
 
 
         if(IsValid(WildPrimitive)) // チェックできてない意味のないチェック
@@ -587,7 +693,7 @@ class AMyActor : public AActor
     {
         if(IsValid(WildPrimitive)) // チェックできてない意味のないチェック
         {
-            WildPrimitive->MarkAsGarbage();
+            WildPrimitive->MarkAsGarbage();// クラッシュの危険
             WildPrimitive = nullptr;
         }
     }
@@ -600,7 +706,10 @@ class AMyActor : public AActor
 ただし、GCされた場合、`UPROPERTY()`ではないので`nullptr`に書き戻されることもありません。相変わらずポインタは無効領域を差しています。
 このとき、デリファレンスすると割り当てられたメモリ領域外にアクセスして未定義動作を起こします。運がよければクラッシュして問題が顕在化します。
 
-運が悪いと、別の`NewObject<T>`が実行され、たまたま同アドレスに新たな`T`が割り当てられたとします。Tもまた`UObject`派生型であるというせいで、`UObjectBase::InternalIndex`などにはギリギリアクセスできてしまいます。そのため`IsValidLowLevel`などは転生した`T`に対して`true`となるときがあります。が、当然自身は`PrimitiveComponent`であると思い込んでいるので、そのsizeでアクセスするし、vtableもそれだと思い込んでいます。謎領域をreadしながら生動きする可能性があります。デバッグビルドだとアクセス違反例外が出ると思います。最適化により例外ちゃチェック機構が無効化されていると出ないこともあります。
+運が悪いと、別の`NewObject<T>`が実行され、低い確率でたまたま同アドレスに新たな`T`が割り当てられたとします。`T`もまた`UObject`派生型であるというせいで、`UObjectBase::InternalIndex`などにはギリギリアクセスできてしまいます。そのため`IsValidLowLevel`などは転生した`T`に対して`true`となるときがあります。が、当然自身は`PrimitiveComponent`であると思い込んでいるので、そのsizeでアクセスするし、vtableもそれだと思い込んでいます。謎領域をreadしながら生動きする可能性があります。デバッグビルドだとアクセス違反例外が出ると思います。最適化により例外チェック機構が無効化されていると出ないこともあります。
 いずれにせよ、生動きにより問題が顕在化しない、もしくは深刻化する可能性が大いにあります。
 
-IDE上でブレイクポイントを貼って、ワイルドポインタの中身を覗いてみるといろんな型に転生していることがわかります。
+生ポ絶対ダメ！
+
+# つづく
+予想通り書くことが多かったので後編に続きます。
