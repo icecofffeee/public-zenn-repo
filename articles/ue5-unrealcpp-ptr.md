@@ -10,6 +10,12 @@ published: true
 本稿では Unreal Engine 5のポインタについて一覧しまとめます。
 どのようなポインタがあり、それぞれどう使うのか、そしてpure C++のポインタとどう違うのかについて言及します。正しい扱い方について述べますので、アクセスバイオレーションを起こさないように気を付けましょう。
 
+あまりに内容が膨大なので、三編に分けました。
+本稿は前編です。
+
+* [中編](https://zenn.dev/allways/articles/ue5-unrealcpp-ptr-second)
+* 後編 - 工事中
+
 # 用語説明
 
 ## 用語定義
@@ -382,7 +388,7 @@ TMap<int, TWeakPtr<FStruct>> WeakLookUpTable;
 ```
 
 # つづく
-予想より書くことが多かったので中編に続きます。
+予想より書くことが多かったので[中編](https://zenn.dev/allways/articles/ue5-unrealcpp-ptr-second)に続きます。
 
 # Reference
 
