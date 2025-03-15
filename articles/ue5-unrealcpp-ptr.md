@@ -189,10 +189,12 @@ if(SharedPtr.IsValid())
 
 ### TSharedPtrのスレッドセーフ性は選択可能
 `std::shared_ptr`の参照カウントはスレッドセーフです。逆にスレッドセーフじゃなくすることはできません。単一のスレッドでしか使わないような状況の場合はこのオーバーヘッドを削りたくなります。一方、`TSharedPtr`ではスレッドセーフ性を型パラメータによって選択することができます。
-デフォルトでは 非スレッドセーフです。
+デフォルトでは ~~非スレッドセーフです。~~ よく見たらスレッドセーフでした。
 ```cpp
 TSharedPtr<int, ESPMode::NotThreadSafe> SharedPtr = MakeShared<int, ESPMode::NotThreadSafe>(123);
 TSharedPtr<int, ESPMode::ThreadSafe> SharedPtr = MakeShared<int, ESPMode::ThreadSafe>(123);
+TSharedPtr<int> SharedPtr = MakeShared<int>(123); // 指定しないときはスレッドセーフ
+
 ```
 
 :::message
