@@ -13,8 +13,9 @@ published: true
 あまりに内容が膨大なので、三編に分けました。
 本稿は前編です。
 
-* [中編](https://zenn.dev/allways/articles/ue5-unrealcpp-ptr-second)
-* 後編 - 工事中
+* [UE5:Unreal Engineのポインタについてまとめた 前編](https://zenn.dev/allways/articles/ue5-unrealcpp-ptr)
+* [UE5:Unreal Engineのポインタについてまとめた 中編](https://zenn.dev/allways/articles/ue5-unrealcpp-ptr-second)
+* [UE5:Unreal Engineのポインタについてまとめた 後編](https://zenn.dev/allways/articles/ue5-unrealcpp-ptr-third)
 
 # 用語説明
 

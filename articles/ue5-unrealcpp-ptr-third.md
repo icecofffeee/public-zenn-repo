@@ -47,17 +47,17 @@ published: true
 
 # 詳解
 
-## TScriptInterface ポインタ
+## `TScriptInterface` ポインタ
 
-TScriptInterface は インターフェースを実装したUObjectへの参照を保持するポインタです。
-UObject が UInterface インターフェースを実装する際に使用します。
+`TScriptInterface` は インターフェースを実装した`UObject`への参照を保持するポインタです。
+`UObject` が `UInterface` インターフェースを実装する際に使用します。
 
-簡潔に述べると、TScriptInterface は TObjectPtr の interfaceに特化した版です。
+簡潔に述べると、`TScriptInterface` は `TObjectPtr` の `interface`に特化した版です。
 
 公式ドキュメントはこちら
 [Unreal Engineのインターフェース](https://dev.epicgames.com/documentation/ja-jp/unreal-engine/interfaces-in-unreal-engine)
 
-前置きですが、C++にインターフェースという機能は存在しません。そんざいしませんが純粋仮想関数を宣言することで実質インターフェースクラスを定義することができます。以降は 純粋仮想関数のみを持ち一切フィールドをもたないclassのことを、C++界におけるinterface とみなして説明します。
+前置きですが、C++にインターフェースという機能は存在しません。存在しませんが純粋仮想関数を宣言することで実質インターフェースクラスを定義することができます。以降は 純粋仮想関数のみを持ち一切フィールドをもたないclassのことを、C++界におけるinterface とみなして説明します。
 
 UEでそのインターフェースを実装する場合 `UINTERFACE`を使用します。
 説明のために簡単なインターフェースを宣言します。事例としてサウンド機能を取り上げます。
@@ -314,6 +314,9 @@ bool IsValid(const TScriptInterface<T>& Interface)
 ### TScriptInterface の検索
 
 `AActor`から `interface`を実装したコンポーネントを得るには `FindComponentByInterface<T>`を使います。
+`Uinterface`を使う一番の理由がここにあると思います。 `UActorComponent`をinterface化すること`Actor`-`Component`間を疎結合にできます。
+`OtherActor`から interface経由でアクセスできるということは、 `Actor`-`Actor`間も疎結合にできるということです。
+Componentからは`GetOwner()`経由で`FindComponentByInterface` を使えば隣のinterfaceを触れますから、`Component`-`Component`間も疎結合になりました。やったー。
 
 ```cpp
 void AProjectile::OnOverlapBegin(AActor* Other)
@@ -339,7 +342,7 @@ void AProjectile::OnOverlapBegin(AActor* Other)
     }
 }
 ```
-APIが対称形じゃないので面倒くさいです。
+単数形が `FindComponentByInterface`, 複数形が `GetComponentsByInterface`とAPIが対称形じゃないので覚えるのが面倒くさいです。
 
 `ISoundService`のように共通サービスなら`WorldSubsystem`に`ServiceProvider`パターンで保持するのがしていくのが楽ちんでしょう。`UGameInstance`でも `GameStatics`でもなんでもいいです。
 ```cpp
@@ -375,7 +378,7 @@ C++ネイティブからならこれでよいのですが、BPからは`tempalte
 
 ### TScriptInterfaceを BPで扱う
 
-正直公式の説明が完璧なのでいうことありません。どう使うかよりも、どれを使うべきかの参考として下記をごらんください。
+正直[公式の説明](https://dev.epicgames.com/documentation/en-us/unreal-engine/interfaces-in-unreal-engine)が完璧なのでいうことありません。どう使うかよりも、どれを使うべきかの参考として下記をごらんください。
 
 * `BlueprintCallable` - Interfaceの関数をBPから呼びたいときに使う
 * `BlueprintImplementableEvent` - C++からInvokeするイベントで、その反応をBPで実装したいときに使う
@@ -419,7 +422,9 @@ FInterfacePtr2 Ptr2; // コンパイルエラー!
 
 ### 参考資料
 
-https://isaratech.com/ue4-declaring-and-using-interfaces-in-c/
+* https://isaratech.com/ue4-declaring-and-using-interfaces-in-c/
+* https://dev.epicgames.com/documentation/en-us/unreal-engine/interfaces-in-unreal-engine
+* https://dev.epicgames.com/community/snippets/003/unreal-engine-interfaces-for-c-and-blueprint
 
 ## UPROPERTY() TSubClassOf<UObject> Pointer;
 
