@@ -11,7 +11,7 @@ published: true
 本稿ではその使い方と活用事例についてまとめます。
 主にC++実装サイドについて触れます。
 
-晴れてエンジン公式プラグインとして標準化されたことで、サードパーティープラグインやオレオレライブラリから依存ライブラリとして簡単に使用できるようになりました。
+`StructUtil`が晴れてエンジン公式プラグインとして標準化されたことで、サードパーティープラグインやオレオレライブラリから依存ライブラリとして簡単に使用できるようになりました。
 `StructUtil`はめちゃくちゃ便利です。
 
 本稿はその前編です。
@@ -21,7 +21,7 @@ published: true
 `StructUtil`とは `USTRUCT*`を`UPROPERTY`として利用できるようにする拡張機能です。
 
 `StructUtil`を使用すれば、`UPROPERTY() FFoo* FooPtr;` を事実上実装可能になります。
-`USTRUCT`ではありません。`USTRUCT*`です。
+`USTRUCT`ではなく`USTRUCT*`です。
 
 # 背景
 
@@ -56,21 +56,22 @@ class UMyObject : public UObject
 
 ## 問題点
 
-これの何が問題であるかというと、ポインタ型`FFoo*`でないために派生型を格納することができないことです。`FFoo`を継承して`FFoo2`にカスタム拡張した構造体を差すことが出来ず拡張性に難があります。
-また依存性の問題もあります。`UMyObject`は必ず `FFoo`の[完全型](https://learn.microsoft.com/ja-jp/cpp/c-language/incomplete-types?view=msvc-170)を必要とします。前方宣言`struct FFoo;`ではなく`#include "Foo.h";`が必要となります。
-`UMyObject`を利用するものもまた`#include "Foo.h";`をすることになり、コンパイル時間が伸びていくこととなります。
+これの問題は、ポインタ型`FFoo*`でないために派生型を格納することができないことです。`FFoo`を継承して`FFoo2`にカスタム拡張した構造体を差すことが出来ず拡張性に難があります。
+次に依存性の問題もあります。`UMyObject`は必ず `FFoo`の[完全型](https://learn.microsoft.com/ja-jp/cpp/c-language/incomplete-types?view=msvc-170)を必要とします。前方宣言`struct FFoo;`ではなく`#include "Foo.h";`が必要となります。`UMyObject`を利用するものもまた`#include "Foo.h";`をすることになり、コンパイル時間が伸びていくこととなります。
 
 ## 従来手法
 
-上記問題に対処するため、わざわざ`UObject*`派生型を定義し,`UPROPERTY() TObjectPtr<UFoo> Foo;`にしていました。`UObject`は大きなclassであるためメモリの無駄が大きい点が玉に瑕です。
+上記問題に対処するため、わざわざ`UObject*`派生型を定義し,`UPROPERTY() TObjectPtr<UFoo> Foo;`にしていました。`UObject`は大きな`class`であるためメモリの無駄が大きい点が玉に瑕です。
 
-他の回避手法もいくつかあるのですが、`UPROEPRTY()`で扱えません。
+他の回避手法として、
 
 * `void*` と 型情報
 * `union`
 * `TVariant`
 
-`StructUtil`を使用すれば、`UPROPERTY() FFoo* FooPtr;` を事実上実装可能になります。
+が考えられますが、`UPROEPRTY()`で扱えません。残念。
+
+そこで、`StructUtil`を使用すれば、`UPROPERTY() FFoo* FooPtr;` を事実上実装可能になります。
 
 :::message
 **`TObjectPtr<TUObject>` の `USTRUCT`バージョンが `TInstancedStruct<T>`です**
@@ -101,18 +102,19 @@ class UMyObject : public UObject
 `FInstancedStruct` は型を保持したバイト配列です。
 `FInstancedStruct`は 具象型`T`を隠蔽しつつも、型付けすることによって、型安全にデータの読み書きができます。任意の`USTRUCT`である`T`型を内部で保持することができます。
 
-これだけならば、ヘルパー構造体を自前実装すれば済むはずなのですが、`FInstancedStruct`の真骨頂はここからです。
+これだけならば、ヘルパー構造体を自前実装すれば済むのですが、`FInstancedStruct`の真骨頂はここからです。
 
 * `UPROPERTY`サポート
 * シリアライズサポート
 * `Unreal Header Tool`:UHTサポート
 * Detailsビューのようなエディタ統合のサポート
+* Blueprintサポート
 
 Unreal Editor上で問題なく触れます。エディタ統合が公式になされているという点は強いです。
 
 ## `FInstancedStruct` の使い方
 
-`Make<T>`もしくは`InitializeAs<T>` で初期化して、 `Get<T>`で読みます。終わり。
+`Make<T>`もしくは`InitializeAs<T>` で初期化して、 `Get<T>`で読みます。
 
 ```cpp
 USTRUCT()
@@ -431,16 +433,20 @@ public:
 `GetPtr<T>`, `GetMutablePtr<T>` は型が異なるとき(キャストに失敗したとき)は`nullptr`を返します。型がよくわからないときはコレでチェックできます。
 
 ```cpp
+USTRUCT() struct FFoo : {GENERATED_BODY() };
+USTRUCT() struct FFoo2 : public FFoo {GENERATED_BODY() };
+USTRUCT() struct FBar : { GENERATED_BODY() };
+
 void Main()
 {
     FInstancedStruct Data;
-    Data.InitializeAs<FMySettings>();
+    Data.InitializeAs<FFoo>();
 
-    // 例外! FMySettigs型はFVector型と継承関係にないので checkに引っかかる
-    const FVector& Vec = Data.Get<FVector>();
+    // 例外! FFoo型はFBar型と継承関係にないので checkに引っかかる
+    const FBar& Bar = Data.Get<FBar>();
 
-    // 例外! FMySettigs型はFVector型と継承関係にないので checkに引っかかる
-    FVector& Vec = Data.GetMutable<FVector>();
+    // 例外! FFoo型はFBar型と継承関係にないので checkに引っかかる
+    FBar& Vec = Data.GetMutable<FBar>();
 
     // チェックして使う
     if( FFoo* Ptr = Data.GetPtr<FFoo>())
@@ -529,7 +535,7 @@ private:
 }
 ```
 
-データ実体はヒープ上にメモリ割り当てが行われてT型に構築されるという点を抑えておけばOKです。そして実体が`uint8*`であるにもかかわらず適切に`T*`としてシリアライズされたりリフレクションから辿れるすごい奴ということです。
+データ実体はヒープ上にメモリ割り当てが行われて`T`型に構築されるという点を抑えておけばOKです。そして実体が`uint8*`であるにもかかわらず適切に`T*`としてシリアライズされたりリフレクションから辿れるすごい奴ということです。
 
 :::message
 説明のための疑似コードです。実際の実装は`UScriptStruct`を使用して`GetStructureSize()`でサイズ計算したりアラインメントあわしたりしてます。BPクラスをサポートするためリフレクション経由で算出されます。概念だけ理解してください。
@@ -542,15 +548,18 @@ private:
 一言でいえば、`TSubclassOf<T>`の `USTRUCT`バージョンです。
 
 `FInstancedStruct` は任意の`USTRUCT`が格納できました。
-任意のUSTRUCTを格納できるということは、逆に言えば何でもかんでも格納できてしまう、ということです。
-`FInstancedStruct`に格納する型`T` は実行時に何度でも変更できます。`InitializeAs<T1>`で初期化したあと、`InitializeAs<T2>`で同じインスタンスを別の型に初期化しなおすことが可能です。
-実行時型付けということは静的解析できませんし、特定の型に制約出来た方が取り回しは良くなることがあります。
+任意の`USTRUCT`を格納できるということは、逆に言えば何でもかんでも格納できてしまう、ということです。`FInstancedStruct`に格納する型`T` は実行時に何度でも変更できます。`InitializeAs<T1>`で初期化した後、`InitializeAs<T2>`で同じインスタンスを別の型に初期化しなおすことが可能です。実行時型付けということは静的解析できませんし、特定の型に制約出来た方が取り回しは良くなることがあります。
 
 
 `TInstancedStruct` はこの点を解決しています。
-`TInstancedStruct` は `FInstancedStruct` をラップする型安全なtemplateクラスです。
+`TInstancedStruct` は `FInstancedStruct` を型付けする`thin`ラッパーな`template`クラスです。
 `TInstancedStruct<T1>` は 型`T1`の派生型のみを受け付け、`TInstancedStruct<T2>`は型`T2`の派生型のみを受け付けます。
 
+## `TInstancedStruct<T>`の初期化
+FInstancedStructと同様です。
+ただし、`template`クラスなのでコンパイル時に静的チェックできます。
+
+少しややこしいのですが、型パラメータ`TBase`の派生型`TDerrieved`で `InitializeAs`できます。
 ```cpp
 USTRUCT() struct FMyBase{ GENERATED_BODY() };
 USTRUCT() struct FMyDerivedA : public FMyBase { GENERATED_BODY() };
@@ -559,12 +568,13 @@ USTRUCT() struct FMyDerivedB : public FMyBase { GENERATED_BODY() };
 
 void Main()
 {
+    // 型パラメータがFMyDerivedAであることに注意
     TInstancedStruct<FMyDerivedA> ASubClass;
 
-    // OK
+    // OK. 型パラメータと同じ型
     ASubClass.InitializeAs<FMyDerivedA>();
 
-    // OK
+    // OK. 型パラメータの派生型
     ASubClass.InitializeAs<FMyDerivedAA>();
 
     // コンパイルエラー!
@@ -572,14 +582,14 @@ void Main()
     ASubClass.InitializeAs<FMyBase>();
 
     // コンパイルエラー!
-    // FMyDerivedBは 共通の祖先をもつものの、FMyDerivedAのサブクラスではない
+    // FMyDerivedBは 共通の祖先をもつが、FMyDerivedAのサブクラスではない
     ASubClass.InitializeAs<FMyDerivedB>();
 }
 ```
-templateクラスなのでコンパイル時に静的チェックできます。
 
+## `TInstancedStruct<T>`の読み書き
 `Get`するときは`InitializeAs`で与えた型と一致させましょう。
-確信が持てないときは `GetPtr<T>`でチェックしてください。
+格納されている型が派生型か確信が持てないときは `GetPtr<T>`でチェックしてください。
 
 ```cpp
 void Main()
@@ -601,7 +611,7 @@ void Main()
 ```
 
 ## `TInstancedStruct<T>`は`UPROPERTY`サポート
-templateクラスではありますが、`UPROEPRTY()`に対応しています。
+`template`クラスではありますが、`UPROEPRTY()`に対応しています。
 Unreal Header Tool で直接名指しでサポートされています。
 
 ```cpp
@@ -623,9 +633,10 @@ class UHoge : public UObject
 仕組みとしては `FInstanceStruct`の `UPROPERTY`対応にそのままのっかっているようです。
 
 ## `TInstancedStruct<T>`は自動でメタタグ付与する
-`UPROPERTY() TInstancedStruct`には`BaseStruct`メタタグを付与できません。
-なぜなら、UHT経由で自動的に型`T`に対する`BaseStruct`メタタグが付与されるからです。
-楽ちん！
+`UPROPERTY() TInstancedStruct`にはUHT経由で自動的に型`T`に対する`BaseStruct`メタタグが付与されます。楽ちんです。
+
+逆に、手動で`BaseStruct`メタタグを付与しようとするとコンパイルエラーとなります。
+
 
 ```cpp
 tempalte<typename T>
@@ -698,17 +709,19 @@ class UHoge : public UObject
 --- 
 
 # `FInstancedStruct` vs `TInstancedStruct<T>`
+ガイドライン
+
 :::message
 * 型が分かるなら`TInstancedStruct<T>`が 良い
-* 型が分かんないなら`FInstancedStruct`が 良い
+* 型が分からないなら`FInstancedStruct`が 良い
 :::
 
 
-基本性能や使い方はどちらも同じです。一番の違いは型情報をコンパイル時に与えるか否かです。可能であるならば、`TInstancedStruct<T>`の方が型安全です。格納する内部型`T`が分かっているなら`TInstancedStruct<T>`で型付けした方がよいです。
+基本性能や使い方はどちらも同じです。一番の違いは型情報をコンパイル時に与えるか否かです。可能であるならば、`TInstancedStruct<T>`の方が型安全です。格納する内部型`T`が分かっているならば`TInstancedStruct<T>`で型付けした方がよいです。
 
-プラグイン開発などで、本当にあらゆる型を受けいれたい場合は`FInstancedStruct`を使います。Blueprintクラスを受け入れたいときも `FInstancedStruct`になるでしょう。C++ビルド時にその型はまだ存在しないので。しかしながら、BPクラスの基底クラスが`AMyActorBase`のように定められる状況であれば、`TInstancedStruct<AMyActorBase>`の方が強いです。
+プラグイン開発などで、本当にあらゆる型を受けいれたい場合は`FInstancedStruct`を使います。Blueprintクラスを受け入れたいときも `FInstancedStruct`になるでしょう。C++ビルド時にBPクラスはまだ存在しませんから。しかしながら、BPクラスの基底クラスが`AMyActorBase`のように定められる状況であれば、`TInstancedStruct<AMyActorBase>`の方が強いでしょう。
 
-実例として`StateTree`プラグインは 任意のユーザー型を引き回すために`FInstancedStruct`を多用しています。状態遷移を組むときにどのような情報が必要になるかを決定できなからですね。
+実例として`StateTree`プラグインは 任意のユーザー型を引き回すために`FInstancedStruct`を多用しています。状態遷移を組むときにどのような情報が必要になるかを決定できないからですね。
 
 ## `TInstancedStruct<T>`も`FInstancedStruct`もStructOps対応
 
@@ -738,13 +751,32 @@ struct TStructOpsTypeTraits<FInstancedStruct> : public TStructOpsTypeTraitsBase2
 ```
 
 # `TInstancedStruct<T>` 詳解
+本題その２です。
 
-型付けするために type_traitをふんだんに使っています。
+といってもあまり書くことはありません。ほとんど `FInstancedStruct` の機能にのっているからです。
+
+## `TInstancedStruct<T>` は `FInstancedStruct`として扱われる
+リフレクション層では `TInstanedStruct` は `FInstancedStruct`として扱われます(!)
+
+```cpp: 疑似コード
+template<class T>
+struct TInstancedStruct
+{
+    FInstancedStruct InstancedStruct;
+}
+```
+このように`FInstancedStruct`を所有しているだけなので、`FInstancedStruct`に`reinter_pret`キャストできます。リフレクション機能などは `FInstancedStruct`にキャストしてしまって、`FInstancedStruct`用のAPIを利用しているようです(!)
+
+もし`TInstancedStruct`をエンジン改造する際は メモリレイアウトが1byteも変わらないようにしないといけませんね。
 
 ## `TInstancedStruct<T>` の UHTサポート
 `TInstancedStruct`はUHT側にて名指しでサポートされています。
 
-BaseStructの指定を忘れることがあるので、`TInstancedStruct<T>` を使用してください。こちらはUHTが自動で `BaseStruct`metaデータを付与します。`UhtStructProperty.cs` に実装が存在しますので、詳しくそちらをご覧ください。
+UHTが自動で `BaseStruct`metaデータを付与します。
+C++ファイル解析により、型パラメータとして与えられた`USTRUCT`が判明しているので、プロパティを付与しています。
+そられのプロパティ情報を使用して、最終的に `gen.cpp` に書き込まれるのでしょう。(あんまり追いかけてない)
+
+`UhtStructProperty.cs` に実装が存在しますので、詳しくそちらをご覧ください。
 
 ```cs: UhtStructProperty.cs
 [UhtPropertyType(Keyword = "TInstancedStruct")]
@@ -755,9 +787,9 @@ private static UhtProperty? InstancedStructProperty(...)
 ```
 
 ## `TInstancedStruct<T>` の型情報の静的チェック
-`is_base_of`など`type_traits`をバリバリ使っています。
+`is_base_of`などC++の`type_traits`をバリバリ使っています。
 
-`Make<T>`, `InitializeAs<T>`, `Get<T>`といったtemplate関数は型`T`が`USTRUCT`であるか、初期化時に指定した型の制約を満たしているかを静的チェックしています。誤った型を使って初期化できないようになっています。静的解析ですので、コンパイルエラーとなります。初期化で与えるコンストラクタ引数も適合するコンストラクタがなければコンパイルエラーとなります。
+`Make<T>`, `InitializeAs<T>`, `Get<T>`といった`template`関数は型`T`が`USTRUCT`であるか、初期化時に指定した型の制約を満たしているかを静的チェックしています。誤った型を使って初期化できないようになっています。静的解析ですので、コンパイルエラーとなります。初期化で与えるコンストラクタ引数も適合するコンストラクタがなければコンパイルエラーとなります。
 
 `TInstancedStruct<T>`はコンパイル時に型情報が確定するので、静的チェックに強いです。
 可能であるならば、`FInsatncedStruct`を使うよりも `TInstancedStruct<T>`の方が便利です。
@@ -771,7 +803,7 @@ BP構造体やユーザー構造体を受ける場合など、コンパイル時
 
 # `FStructView` と `FConstStructView` 
 
-`FStructView` と `FConstStructView`はほぼ同じです。`FStructView` は `FConstStructView`と異なり Tを書き換えられるだけです。
+`FStructView` と `FConstStructView`はほぼ同じです。`FStructView` は `FConstStructView`と異なり `T`を書き換えられるだけです。
 そのため`FConstStructView`について説明します。
 
 `FConstStructView`は 構造体へ型付けされた`FInsancedStruct` に対応する、`readonly`なビューです。
@@ -806,7 +838,7 @@ void Use(FInstancedStruct& InstancedStruct)
 }
 ```
 
-余談ですが、FConstStructView自体はmutableです。
+余談ですが、`FConstStructView`自体は`mutable`です。
 ```cpp
 void Use(FInstancedStruct& InstancedStruct)
 {
@@ -833,27 +865,25 @@ FConstStructView View = FConstStructView::Make(Instance);
 小さなオブジェクトなので オブジェクトの値渡しでＯＫです。下手に参照渡しにするよりも値渡しでＯＫです。ビューですから。
 
 ```cpp
-static void Use(FConstStructView View)
-{
-    if( const FFoo* Ptr = View.GetPtr<FFoo>)
-    {
-
-        Ptr->...;
-    }
-}
+static void PassByValue(FConstStructView View){} //値渡しでOK
+static void PassByRef(FConstStructView& RefView){} //参照渡しにする意義がない
+static void PassByRValue(FConstStructView&& RefView){} //転送する意義がない
 
 static void Main()
 {
     FInstancedStruct Instance;
     FConstStructView View = FConstStructView::Make(Instance);
-    Use(View);
+    PassByValue(View);
+
+    // ワンライナーで渡すことが多いかも
+    PassByValue(FConstStructView::Make(Instance));
 }
 ```
 
 意味論的にビューは「メモリの所有権を持たない」、と契約していることが重要です。
 生ポインタだと所有権を持っているかどうかは判断できませんが、ビューならば持たないことは確実です。
 
-ユーザー側はビューが指し示すメモリ領域の寿命を知りません。そのため、`FConstStructView`が渡されたときその寿命は関数スコープだと考えるべきです。
+ユーザーはビューが指し示すメモリ領域の寿命を知りません。そのため、`FConstStructView`が渡されたときその寿命は関数スコープだと考えるべきです。
 ラムダキャプチャしたりMoveTempで送るときは気を付けましょう。
 
 ## Viewから意図的にDeepCopyできる
@@ -866,9 +896,9 @@ TQueue<FInstancedStruct> Queue;
 
 void Enqueue(FConstStructView PayloadView)
 {
-    // コンストラクタ
+    // コンストラクタでビューからコピー
     FInstancedStruct Copy(PalyloadView);
-    // Make関数
+    // Make関数でビューからコピー
     FInstancedStruct Copy = FInstancedStruct::Make(PalyloadView);
     Queue.Enqueue(Copy);
 
@@ -920,7 +950,7 @@ void Receiver()
 
 無駄な一時オブジェクトのmallocやコピーを省略しており、効率的です。
 Delegateを利用する側はメモリ領域を意識する必要がありません。
-FStructViewのみに依存すればいいです。具象型Tも自身の興味ある型だけでよいです。
+`FStructView`のみに依存すればいいです。具象型`T`も自身の興味ある型だけでよいです。
 
 
 :::message
