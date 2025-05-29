@@ -1,21 +1,43 @@
 ---
-title: "UE5:Unreal EngineのStructUtilについてまとめた 後編"
+title: "UE5:Unreal EngineのStructUtilについてまとめた 中編"
 emoji: "😽"
 type: "tech" # tech: 技術記事 / idea: アイデア
 topics: [ue5, cpp, unrealengine, unrealengine5]
 published: false
 ---
 
+# はじめに
+StructUtilシリーズ第二弾です。
+本稿は中編です。
+
+* [UE5:Unreal EngineのStructUtilについてまとめた 前編](https://zenn.dev/allways/articles/ue5-structutil-research)
+* [UE5:Unreal EngineのStructUtilについてまとめた 中編](https://zenn.dev/allways/articles/ue5-structutil-research-second)
+
+# StructUtilの主要型
+再掲。
+
+* `FInstancedStruct`
+* `TInstancedStruct`
+* `FStructView`
+* `FConstStructView`
+* `FSharedStruct`
+* `FConstSharedStruct`
+* `TSharedStruct<T>`
+* `TConstSharedStruct<T>`
+* `FStructArrayView`
+* `FConstStructArrayView`
+
+ひとつずつ触れていきましょう。
+
 # `FSharedStruct` と `FConstSharedStruct`
 
 `FInstancedStruct` の メモリ領域を共有するバージョンです。
-シンプルに`TSharedPtr<FInstancedStruct>`みたいな機能を持つ構造体です。ただし、単純にラップしてしまうとダブルポインタ操作になってしまうので、これを避けるために、`FStructSharedMemory`を利用して、共有メモリを直接保持しています。`FInstancedStruct`とは結構異なる実装になっています。
 
-重要なのは FSharedStruct は 同一のメモリ領域を参照カウント方式で共有しているという点です。
-FInstancedStruct をコピーするとメモリがDeepCopyされていましたが、こちらは同一の領域を共有します。
-BP型のように事前に型を決定できない状況で共有できます。
+`FSharedStruct`は`TSharedPtr<FInstancedStruct>`のような機能を持つ構造体です。`FStructSharedMemory`を利用して、共有メモリを直接保持しています。`FInstancedStruct`とは結構異なる実装になっています。
 
-`FSharedStruct`と `FConstSharedStruct`はメモリ領域を書き換えられるかどうかだけの違いです。
+`FSharedStruct` は 同一のメモリ領域を参照カウント方式で共有しています。`FInstancedStruct` をコピーするとメモリがDeepCopyされていましたが、こちらは同一の領域を共有します。BP型のように事前に型を決定できない状況でインスタンスを共有できます。
+
+`FSharedStruct`と `FConstSharedStruct`の違いはメモリ領域を書き換えられるかどうかだけです。
 以降は `FSharedStruct` について解説します。
 
 ## `FSharedStruct`の作成
@@ -31,9 +53,12 @@ FSharedStruct SharedStruct;
 SharedStruct.InitializeAs<FFoo>();
 ```
 
+どちらも、内部で `MakeSharable`を利用しています。
+
 ## `FSharedStruct`の破棄
 
-`Reset`するか、デストラクタで参照カウントが減ります。
+`Reset`で明示的に破棄するか、デストラクタで破棄されます。`operator=`でも元の共有参照は破棄されます。破棄されると参照カウントが減ります。参照カウントが0になった時点で内部型`T` のデストラクタ`~T()`が実行されて`Free`されます。
+
 ```cpp
 void Main()
 {
@@ -46,12 +71,21 @@ void Main()
     {
         // 参照カウントが3に増える
         FSharedStruct Shared3 = SharedStruct;
+        // 参照カウントが4に増える
+        FSharedStruct Shared4 = Shared3;
+
+        Shared4 = {}; // 参照カウントが3に減る
     } // 参照カウントが2に減る
 
     Shared2.Reset(); // 参照カウントが1に減る
 
-}// 参照カウントが0になりFreeされる
+}// 参照カウントが0になりデストラクタ呼び出す＆Freeされる
 ```
+
+:::message
+`MakeSharable` は非侵襲型共有メモリなので、Weak参照が残っていてもFreeされます。
+詳しくは [UE5:Unreal Engineのポインタについてまとめた 前編](https://zenn.dev/allways/articles/ue5-unrealcpp-ptr#tsharedptr)をご覧ください。
+:::
 
 ## `FSharedStruct`の読み書き
 
@@ -69,28 +103,121 @@ void Main()
     FFoo* Foo = SharedStruct.GetPtr<FFoo>();
     Foo->Value = 44;
 }
-
 ```
+
+:::message
+共有しているメモリ領域はスレッドセーフではありません。
+Writeアクセス時は気をつけてください。
+:::
+
+## `FSharedStruct`の比較
+`operator==`で比較できます。
+ただし、アドレス比較のみです。メモリ領域のデータ比較は行いません。`nullptr`含め同じアドレスを指していたら一致します。内部では`TSharedPtr`の形で持っておりますが、参照カウンタ等は比較しませんし、`TSharedPtr`の`operator==`も使いません。
+
+疑似コード
+```cpp
+TSharedPtr<FStructSharedMemory>　Ptr;
+
+bool operator==(const FSharedStruct& Other)
+{
+    // ポインタの比較
+    return (Ptr->ScriptStruct == Other.Ptr->ScriptStruct) && (Ptr->Memory == Other.Ptr->Memory));
+
+    // MemCmp()ではない
+}
+```
+汎用共有参照型であるという観点から妥当な実装だと思います。同一のメモリ領域を指しているのであれば、ちゃんと共有できており2つのインスタンスは同一であるとみなせますからね。
+
+内部データの値が同一であることを期待するような稀有な場面では注意してください。例えば、`TMap`のキーや`TSet`に入れる場合、IDの照合に使う場合などです。どこのメモリ領域にあるかよりも、内容が同じであれば振る舞いとしては同値であってほしい場面も存在します。
+
+```cpp
+USTRUCT() 
+struct FFString
+{
+    GENERATED_BODY()
+    FString Value;
+
+    bool operator==(const FFString& Other) const
+    {
+        return Value == Other.Value;
+    }
+}
+
+static bool CheckPassword(FSharedStruct& Lhs, FSharedStruct& Rhs)
+{
+    // アドレス比較だよ. パスワードをアドレスで比較しちゃダメだよ
+    return Lhs == Rsh;
+}
+
+FSharedStruct SharedData1 = Make<FFString>(TEXT("Foobar"));
+FSharedStruct SharedData2 = Make<FFString>(TEXT("Foobar"));
+
+void Case0()
+{
+    bool Result = CheckPassword(SharedData1, SharedData2);
+
+    // どちらも値は"Foobar"で合っているがメモリは異なる場所に確保されているのでfalse
+    ensure(Result == false); 
+
+    // ちゃんと共有していたらtrue
+    FSharedStruct SharedData3 = SharedData;
+    ensure(CheckPassword(SharedData3) == true);
+}
+
+void Case1()
+{
+    // Arrayから "Foobar"な値を探したい
+    TArray<FSharedStruct> Datas;
+    Datas.Emplace(SharedData1);
+    Datas.Emplace(SharedData2);
+    auto* Found = Datas.FindByPredicate(
+        [Data4=FSharedStruct::Make<FFString>(TEXT("Foobar"))](FSharedStruct& Data)
+    {
+        return Data4 == Data;
+    });
+
+    //この実装では何も見つからないよ
+    ensure(Found == nullptr);
+}
+```
+共有参照型なので、自然なことだと思います。
+
+中身を比較したいなら中身の型を取り出して比較するべきでしょう。
+
+```cpp
+bool CheckValueEqual(const FSharedStruct& Lhs, const FSharedStruct& Rhs)
+{
+    // 暗黙的に生成される FFString::operator== を利用
+    // つまり FString::operator==を利用
+    bool ValueEqual = Lhs.Get<FFString>() == Rhs.Get<FFString>();
+    return ValueEqual;
+}
+```
+`FString`を `FName`や`FGuid`に置き換えた方が分かりやすいかも。値の同一性が重要視される場面では気をつけて。
 
 ## `FSharedStruct`のハンドリング
 
-共有参照が必要なときは`const&`渡しがお勧めです。値渡しの場合は一時オブジェクトにより参照カウントが増えますのでオーバーヘッドが無駄です。
+共有参照が必要なときは`const&`渡しがお勧めです。値渡しの場合は一時オブジェクトにより参照カウントが増えるので、無駄なオーバーヘッドが発生します。
+
 ```cpp
 FSharedStruct SharedData;
 
+// const& で受け取る
 void RecieveData_Good(const FSharedStruct& InSharedData)
 {
     // 共有したり
     this->SharedData = InSharedData;
 }
 
-// 引数に積まれるときに参照カウントが1増える
+// 値渡しでは引数に積まれるときに参照カウントが1増える
 void RecieveData_Bad(FSharedStruct InSharedData){}
 ```
 
-値を使いたいだけならば、 `FSharedStruct`/ `FConstSharedStruct`に変換して渡せます。
-メモリの所有権が不要ならば、こちらでよいでしょう。Delegate型の種類を減らしたり、同じシグネチャの関数に渡せたり結構便利です。
+### `FSharedStruct`から Viewへの変換もOK
+`FStructView`/ `FConstStructView`に変換して渡せます。
+値を使いたいだけならば、こちらでよいでしょう。Delegate型の種類を減らしたり、同じシグネチャの関数に渡せたり結構便利です。
 
+前編でも述べましたが、`FStructView`はビューなのでメモリの所有権を持ちません。`FSharedStruct`は所有権を持ちますから大きく異なります。所有権に興味がない場面においては`FStructView`渡しが適切です。
 ```cpp
 FSharedStruct SharedData;
 
@@ -106,11 +233,9 @@ void Main()
 ```
 
 
-
 ## `FSharedStruct`は UPROPERTY対応
 
-`TSharedPtr<T>`はダメなのに、 それをラップする`FSharedStruct`は`UPROEPRTY`対応です。
-何気にこれは凄いことです。
+`FSharedStruct`は`UPROEPRTY`対応です。`TSharedPtr<T>`はダメなのに、何気に凄い。
 
 ```cpp
 UCLASS()
@@ -119,33 +244,48 @@ class UHoge : public UObject
     GENERATED_BODY()
 
 private:
-    UPROPERTY()
-    FSharedStruct SharedData;
-
-    UPROPERTY()
-    FConstSharedStruct ConstSharedData;
+    UPROPERTY() FSharedStruct SharedData;
+    UPROPERTY() FConstSharedStruct ConstSharedData;
 }
 ```
 
-なお`EditAnywhere`を付けたところで Detailsビューでは編集できませんでした。シリアライズされて保持される、ということでしょう。
+なお`EditAnywhere`を付けても Detailsビューでは編集できませんでした。残念です。
 
-## `FSharedStruct`は BPだめ
+## `FSharedStruct`は `Blueprint` 非対応
 
-ダメでした。
-`Error  : Type 'FSharedStruct' is not supported by blueprint.`
+BPダメでした。 😿
+
+> `Error  : Type 'FSharedStruct' is not supported by blueprint.`
+
+```cpp
+// ダメ
+UFUNCTION(BlueprintCallable)
+void SetSharedData(const FSharedStruct& InSharedData);
+
+// ダメ
+UFUNCTION(BlueprintCallable)
+void SetSharedData(FSharedStruct InSharedData);
+
+```
 
 # `FSharedStruct` 詳解
+本題です。`FSharedStruct`の謎に迫ります。
 
-疑似コードです。省略すると以下の通りになります。
+`FSharedStruct`は 共有ポインタを持つラッパーです。単純に`TSharedPtr<FInstancedStruct>`をラップしてしまうとダブルポインタ操作になってしまい、キャッシュミスが増えます。これを避けるための工夫が施されています。
+
+以下疑似コードです。色々省略すると次の通りになります。
 ```cpp
 struct FSharedStruct
 {
     TSharedPtr<FStructSharedMemory> Memory;
 }
 ```
-ただのラッパーですね。本体は`FStructSharedMemory`です。
+本体は`FStructSharedMemory`ですね。
 
-`FStructSharedMemory`の疑似コードです。
+
+
+
+以下`FStructSharedMemory`の疑似コードです。
 ```cpp
 struct FStructSharedMemory
 {
@@ -156,32 +296,45 @@ struct FStructSharedMemory
 型情報とメモリ領域をもっており、`FInstancedStruct`と同じ感じです。
 ですが、長さ0の配列を持っていますね。キモイですね。
 
-これは`Flexible array member`パターンです。C言語ではC99でサポートされていますが、C++ではサポートされてたかよくわかりませんでした。
+これは`Flexible array member`パターンというものです。C言語ではC99でサポートされていますが、C++では正式サポートされてたかよくわかりませんでした。でもまぁ動いているんでサポートされているんでしょう！
 
-フレキシブル配列ですが、次のような雰囲気のメモリ確保します。
+フレキシブル配列ですが、次のような雰囲気でメモリ確保します。
 理解を助けるために簡単化した疑似コードです。
 
 ```cpp
-//こんな感じ
+//1. メモリ確保
 const int32 ToalMemSize = sizeof(FStructSharedMemory) + sizeof(T);
 uint8* AllocatedMemory = Malloc(ToalMemSize);
-uint8* PointerAreaMemory = AllocatedMemory;
-new (PointerAreaMemory) FStructSharedMemory();
 
-FStructSharedMemory* SharedMem = reinterpret_cast<FStructSharedMemory>(PointerAreaMemory);
+//2. 制御領域のオブジェクト構築
+new (AllocatedMemory) FStructSharedMemory();
+FStructSharedMemory* SharedMem = reinterpret_cast<FStructSharedMemory>(AllocatedMemory);
+
+//3. データ領域のオブジェクト構築
 uint8* StructAreaMemory = SharedMem->Memory;
 new (StructAreaMemory) T();
+
+//4. SharedPtrを作る
 TSharedPtr<FStructSharedMemory> Ptr = MakeSharable<FStructSharedMemory>(AllocatedMemory, CustomDeleter);
+return FSharedStruct(Ptr); //インスタンスできた
 ```
 
+
+### 制御ブロックも含めてメモリ確保
 順番に解説します。
 重要な点は どかんと連続した領域にメモリ確保していることです。
-```
+```cpp
+// 1.メモリ確保
 const int32 ToalMemSize = sizeof(FStructSharedMemory) + sizeof(T);
 uint8* AllocatedMemory = Malloc(ToalMemSize);
 ```
+まず、`TotalMemSize`を求めましょう。
+`sizeof(TObjectPtr<T>)`は8byteです。`TObjectPtr`は生ポとサイズが一致するように厳密に実装されているからです。次に、長さ0の配列`uint8 Memory[0];`は0byteです。
+よって`sizeof(FStructSharedMemory)` は8+0=8byteです。
 
-このように、8byte + 型Tの分確保します。図では32byte確保してます。
+`sizeof(T)`の部分はアラインメントも考慮されて定まります。実際は`UScriptStruct`から得られます。今回は24byteであると仮定して話を進めます。`TotalMemSize`は8+24=32byteとなりました。
+
+以下に32byte確保した様子を図示します。
 (パケット図は本当はbit表記だけどbyteで読んでください)
 
 ```mermaid
@@ -189,18 +342,22 @@ packet-beta
 title AllocatedMemory
 0-31: "未初期化領域"
 ```
+`FMemory::Malloc`で初期化なしに確保します。
 
-連続したメモリ領域に確保することでダブルポインタによる2連続fetchを回避します。キャッシュ効率があがるはずです。
 
-次に`placement new` でメモリ領域にオブジェクトを構築していきます。まずは`FStructSharedMemory`部分を構築します。
-先頭アドレスから `sizeof(FStructSharedMemory)` 分構築します。
-`sizeof(FStructSharedMemory)` = 8+0 =8byteです。`TObjectPtr`1つ8byte、長さ0の配列は0byteです。
+### 制御領域のオブジェクト構築
+次に配置newこと`placement new` でメモリ領域にオブジェクトを構築していきます。
+構築は2回行います。最初は制御領域である`FStructSharedMemory`部分を構築します。先頭アドレスから `sizeof(FStructSharedMemory)` 分構築します。
+`sizeof(FStructSharedMemory)` は8byteでしたね。
 
 
 ```cpp
-uint8* PointerAreaMemory = AllocatedMemory;
-new (PointerAreaMemory) FStructSharedMemory();
+//2. 制御領域のオブジェクト構築
+new (AllocatedMemory) FStructSharedMemory();
+FStructSharedMemory* SharedMem = reinterpret_cast<FStructSharedMemory>(AllocatedMemory);
 ```
+
+`placement new` によって下図のように8byte構築されました。
 
 ```mermaid
 packet-beta
@@ -209,11 +366,12 @@ title AllocatedMemory
 8-31: "未初期化領域"
 ```
 
-次にデータ領域を構築していきます。フレキシブル配列メンバーの場合、`FStructSharedMemory::Memory[0]`はoffsetされた位置を差しています。
-今回の場合はまさに 8byte分進んだ位置を差しています。そこに T型で構築します。
+### データ領域のオブジェクト構築
+次にデータ領域を構築していきます。フレキシブル配列メンバーの場合、`FStructSharedMemory::Memory[0]`は8byteだけoffsetされた位置を差しています。
+そこを `T`型で構築します。
 
 ```cpp
-FStructSharedMemory* SharedMem = reinterpret_cast<FStructSharedMemory>(PointerAreaMemory);
+//3. データ領域のオブジェクト構築
 uint8* StructAreaMemory = SharedMem->Memory;
 new (StructAreaMemory) T();
 ```
@@ -227,10 +385,14 @@ title AllocatedMemory
 
 上記手順により `AllcatedMemory`は無事構築されました。
 
+### TSharedPtr作って終わり
 あとは`TSharedPtr`に渡すだけです。今回は特殊な初期化をしてしまったので、単純なdelete では解放できません。正しく実装したカスタムデリータを渡します。
 
 ```cpp
-TSharedPtr<FStructSharedMemory> Ptr = MakeSharable<FStructSharedMemory>(AllocatedMemory, CustomDeleter);
+//4. SharedPtrを作る
+TSharedPtr<FStructSharedMemory> Ptr =
+             MakeSharable<FStructSharedMemory>(AllocatedMemory, CustomDeleter);
+return FSharedStruct(Ptr); //インスタンスできた
 ```
 
 ```mermaid
@@ -241,13 +403,194 @@ title FSharedStruct
 16-24: "WeakCount"
 ```
 
-↑上図の`FSharedStruct::TSharedPtr<T>::Ptr`の部分が ↓下図のオブジェクト先頭を指しています。
-
 ```mermaid
 packet-beta
 title AllocatedMemory
 0-7: "ScriptStruct"
 8-31: "struct T"
+```
+
+上図の`FSharedStruct::TSharedPtr<T>::Ptr`の部分が `AllocatedMemory`の先頭を指しています。
+
+カスタムデリータは本質ではないので、疑似コードです。`Malloc`の返り値をつかって`Free`しましょうね、というものです。
+実際はラムダ式ではありません。
+```cpp
+auto CustomDeleter = [=AllocatedMemroy]()
+{
+    FMemory::Free(AllocatedMemory);
+};
+```
+
+### なぜこんな面倒くさいことをしているのか
+`Flexible array member`パターンを利用することで、制御ブロック含め連続したメモリ領域に確保することでキャッシュヒット率をあげたいからです。素直に `TSharedPtr<FInstancedStruct>`を使ってしまうと、ダブルポインタのダブルデリファレンスにより2連続でload命令が発生する可能性がとても高く損です。
+
+1. `TSharedPtr<FInstancedStruct>::Ptr` のデリファレンスとload命令
+2. `FInstancedStruct::Memory`のデリファレンスとload命令
+
+具体的に`TSharedPtr<FInstancedStruct>`を使ったとき、を考えます。
+```cpp
+TSharedPtr<FInstancedStruct> SharedPtr;
+// 1回目のデリファレンス
+FFoo* FooPtr = SharedPtr->GetPtr<FFoo>();
+// 2回目のデリファレンス
+(*FooPtr) = FFoo(100);
+```
+
+上記はそれぞれがMallocしているため、別々のヒープに確保される可能性が高いです。
+`SharedPtr::Ptr`の指すアドレスが`0x12345678_00000000`だとしたら`FooPtr` の指すアドレスは`0xdeadbeaf_ffffffff`ぐらい離れているかもわかりません。
+L1キャッシュサイズよりも離れていたらL2キャッシュから、そこよりも離れていたらL3キャッシュ...　とloadされるでしょう。間に4kテクスチャやvoiceデータが挟まっていたらどれだけ離れるか見当もつきません。
+
+```
+TSharedPtr<FInstancedStruct>
+│
+└── Ptr (0x12345678_00000000) ──▶ [FInstancedStruct]
+                                     │
+                                     └── Memory (0xdeadbeaf_ffffffff) [FFoo]
+```
+
+では FSharedStructの場合はどうでしょうか？
+```cpp
+FSharedStruct SharedData = FSharedStruct::Make<FFoo>();
+// 1回目のデリファレンス
+FFoo* FooPtr = SharedData.GetPtr<FFoo>();
+// 2回目のデリファレンス
+(*FooPtr) = FFoo(100);
+```
+
+デリファレンス自体は2回発生していますね。ただし、2回目のデリファレンスでは、すぐ近くを指します。`FSharedStruct::Ptr`の指すアドレスが`0x12345678_00000000`だとしたら`FooPtr` の指すアドレスは`0x12345678_00000008`です。
+これだけ近いとキャッシュラインにのっており、data prefetchでロード済みであろうから、L1キャッシュに高確率でキャッシュヒットするため、あっという間に実行されるはずです。
+
+```
+FSharedStruct
+│
+└── Ptr (0x12345678_00000000) ──▶ [AllocatedMemory]
+                                     │
+                                     └── ScriptStruct (0x12345678_00000000) 
+                                     └── Memory       (0x12345678_00000008) [FFoo]
+```
+
+--- 
+# TSharedStruct
+
+`TSharedStruct<T>`は `FSharedStruct` の型付け版です。
+`TInstancedStruct<T>`の　メモリ共有版とも言えます。
+
+型付けの有無と, メモリ所有権の2軸で表にするとこんな感じ。
+
+|     | 汎用 | 型付け | 
+| --- | --- | --- |
+|**所有**| `FInstancedStruct` | `TInstancedStruct<T>` |
+|**共有**| `FSharedStruct` | `TSharedStruct<T>` |
+
+
+## `TSharedStruct<T>`の作成
+`FSharedStruct`と全く一緒です。
+なぜならば`FSharedStruct::Make`, `FSharedStruct::InitializeAs`を使っているからです。
+
+```cpp
+TSharedStruct<FFoo> SharedData = TSharedStruct<FFoo>::Make();
+
+TSharedStruct<FFoo> SharedData;
+SharedData.InitializeAs<FFoo>();
+```
+
+新たな共有メモリを確保して、その領域を与えられた引数で構築します。引数は捨てて構いません。
+
+## TSharedStructの破棄
+`FSharedStruct`と全く一緒です。
+
+## TSharedStructの読み書き
+`FSharedStruct`と一緒です。
+
+静的型付けされているため、型パラメータは省略可能です。
+
+## TSharedStructの比較
+`FSharedStruct`と全く一緒です。アドレス比較です。
+固定のID型は共有しがちなので、やりがち。
+
+```cpp: 怪しい例
+USTRUCT() struct FFGuid{ GENERATED_BODY() FGuid Guid; }
+
+// どちらも同じIDだけどfalseだよ
+TSharedStruct<FFGuid> VenderID1 = TSharedStruct<FFGuid>::Make(1,2,3,4);
+TSharedStruct<FFGuid> VenderID2 = TSharedStruct<FFGuid>::Make(1,2,3,4);
+ensure(VenderID1 != VenderID2);
+```
+
+型付けされている分やりがちかも？？？こういうコードをAIに書かれたときに気づけるかどうか自信ないです。
+```cpp: 怪しい例
+using FStatusCode = TSharedStruct<FHttpStatus>;
+static const FStatusCode NotFound = FStatusCode::Make(404);
+void OnReceive(const FStatusCode& StatusCode)
+{
+    if(StatusCode == NotFound)
+    {
+        // 値が404でもアドレスが違えばここには来ない...
+    }
+}
+
+```
+---
+# `TSharedStruct<T>` 詳解
+本題その2です。
+
+`FSharedStruct` の説明と大体同じです。
+
+## `TSharedStruct<T>` は `FSharedStruct`として扱われる
+
+```cpp: 疑似コード
+template<class T>
+struct TSharedStruct
+{
+    FSharedStruct Data;
+}
+```
+
+リフレクション層では、`TSharedStruct`は `FSharedStruct`として扱われます。
+シリアライズなどもsupported です。
+
+その他テンプレート的な特徴は `TInstancedStruct<T>` で説明したことと同じです。
+
+## `TSharedStruct<T>` は 標準レイアウト型
+`standard_layout`です。メモリレイアウトははっきりしています。すごい。
+
+```cpp: 疑似コード
+USTRUCT() struct FFoo{ GENERATED_BODY() int Value;}
+
+// 全部OK
+static_assert(std::is_standard_layout_v<FStructSharedMemory>);
+static_assert(std::is_standard_layout_v<TSharedPtr<FStructSharedMemory>>);
+static_assert(std::is_standard_layout_v<FSharedStruct>);
+static_assert(std::is_standard_layout_v<TSharedStruct<FFoo>>);
+```
+
+`standard_layout`だと何がうれしいのかというと、
+
+1. `EBO:Empty base optimization`の条件を1つ満たします
+1. `this`を`reinterpret_cast`で最初の非静的メンバーを指すポインタへ変換しても合法です
+1. `offsetof` が合法的に使えます
+1. `ABI:Application Binary Interface`を満たします
+
+というわけで、`TSharedStruct<T>`は なぜ`FSharedStruct`として扱っていいのかという答えがここにあります。
+> `reinterpret_cast`で最初の非静的メンバーを指すポインタへ変換しても合法
+
+```cpp: 再掲
+struct TSharedStruct
+{
+    FSharedStruct Struct;
+}
+
+void Main()
+{
+    TSharedStruct<FFoo> Data;
+
+    //これは当然
+    FSharedStruct* Ptr0 = &Data.Struct;
+
+    // standard_layoutなら合法
+    FSharedStruct* Ptr1 = reinterpret_cast<FSharedStruct*>(&Data);
+    ensure(Ptr0 == Ptr1);
+}
 ```
 
 # 共有ポインタ対応表
@@ -264,188 +607,6 @@ title AllocatedMemory
 `USTRUCT*` に対する参照カウント方式共有参照は `FSharedStruct`、
 `Native`型に対する参照カウント方式共有参照は `TSharedPtr<T>`です。
 
-
 ---
 
-# 以下したがき
-
-ライブラリ側で使います。
-任意のユーザー型`T`を`FInstancedStruct`で曖昧に受けたとき、`FStructView`や `FConstStructView`を利用して曖昧型のままハンドリングできます。
-
-`FStructView`を使わずに`FInstancedStruct&`で引き回すしたらいいと思われるかもしれません。
-しかし、メモリの所有権を持たない、ということが重要に思います。`FInstancedStruct&`は `InitializeAs<T>`でメモリを再確保できてしまいます。
-失敗できるということは誰かがバグらせる余地があるということです。マーフィーの法則にしたがえば、必ずバグります。
-そもそも間違えられないように作るのが理想ですから、FStructViewを使って、メモリのR/Wのみ許可してAlloc/Freeはできないようにすると良いです。
-
-## 頑健なアクセス制御
-TConstInstancedStruct のように便利ラッパーが存在します。
-readonly アクセスのみ公開したいようなケースで有効です。
-
-TConstSharedStruct や TSharedStructのように具象型を隠蔽しつつ、共有制御もできます。
-
-## `StructUtil`が解決した課題
-
-これまで具象型に依存しない汎用型のデータホルダー実装そちて、`union`や `TVarint`がありました。
-しかしながら、弱点が沢山あり滅多に使えませんでした。
-
-  * 内部データ型を知るために`enum`や `FName`を使って`switch-case`する必要がある
-  * コーディングをミスるとアクセス違反してしまう
-  * 誤った型を入力することができて、コンパイル時に検知できない
-  * メンテンスが大変
-  * 型T1,T2...の中から`sizeof(T)`が最大の分だけ確保しなくてはならずメモリが無駄
-  * **BP非対応**
-  * `UPROPERTY`非対応
-
-これらの問題を解決したのが `FInstancedStruct`です。
-
-  * 静的型付け
-  * 実行時型チェック
-  * BP対応
-  * エディタ拡張対応
-    * Detialsビューでstructを選択できる
-  * UPROPERTY対応
-    * シリアライズ
-    * UPROPERTY修飾子
-
-至せり尽くせりです。実際に使用して評価してみましたが、弱点が見当たりません。
-
-
-# `StructUtil` の 使いどころ
-
-小さな構造体の取り回しをよくする機能であるので、差さるところには非常に差さります。
-
-## メッセージのPub/Subに最適
-具象型が隠蔽できるため、任意の型をペイロードとして載せることが可能です。
-
-```cpp: publisher.cpp
-void Publisher()
-{
-    //スタック領域のインスタンスからviewを作って引き回せる
-    {
-        FFoo Foo;
-        FStructView View(Foo::StaticStruct(), &Foo);
-
-        FFoo& Foo2 = View.Get();
-        ensure(&Foo == &Foo2);
-
-        Delegate.BroadCast(View);
-    } //Fooの寿命を迎えたのでメモリは解放される
-
-    {
-        // ヒープ領域のviewを作る
-        TUniquePtr<FFoo> Foo = MakeUnique<FFoo>();
-        FStructView View(Foo::StaticStruct(), Foo.Get());
-
-        Delegate.BroadCast(View);
-    }
-
-    {
-        // メンバーフィールドからビューを作る
-        UFoo* Obj = NewObject<UFoo>();
-        FStructView View(Foo::StaticStruct(), &Obj->Foo);
-        Delegate.BroadCast(View);
-    }
-}
-```
-リスナー側は汎用型のまま受信できます。ハンドルしたりコピーしたりできます。
-
-```cpp: subscriber.cpp
-
-UPROPERTY()
-TQueue<FInstancedStruct, Mpsc> Queue;
-
-// 別スレッドから受信する
-void OnReceived_Concurrent(FConstStructView PayloadView)
-{
-    // FConstStructViewから FInstancedStructへのコピー
-    // PayloadViewが指すメモリ領域の寿命が分からないのでコピーする
-    Queue.Enqueue(PayloadView);
-
-    //購読者が勝手に書き換えることは出来ないので安全
-    // コンパイルエラー
-    //PayloadView.GetMutable().Value = ...;
-}
-
-// メインスレで消費する
-void Consume_GameThread()
-{
-    while(FInstancedStruct& Payload = Queue.Pop())
-    {
-        ...
-    };
-}
-```
-
-
-```cpp
-// MyMessageSubsystem.h
-
-// 具象型に依存しないコンテナ型としてペイロードを定義できる
-DECLARE_DELEGATE_OneParam(FOnMessageRecieved, const FInstancedStruct&);
-
-// 型を絞りたいならベース型を指定してもよい
-DECLARE_DELEGATE_OneParam(FOnMessageBaseRecieved, const TInstancedStruct<FMyMessageBase>&);
-
-// 適当にマネージャークラスを用意
-UCLASS()
-class UMyMessageSubsystem : UWorldSubsystem
-{
-    GENERATED_BODY()
-
-    FOnMessageRecieved Recieved;
-}
-
-// Subscriber.cpp
-// 購読側は自身の興味のある具象型のみを知ればよい
-#include "FMyMessage0.h"
-#include "FMyMessage1.h"
-
-UCLASS()
-class ASubscriber : public AActor
-{
-    virtual void BeginPlay()
-    {
-        UMyMessageSubssytem* MessageSystem;
-        MessageSystem->Recieved = [](const FInstancedStruct& Payload)
-        {
-            if(const FMyMessage0* Message0 = Payload.GetPtr<FMyMessage0>())
-            {
-                // 処理する
-            }
-            else if( const FMyMessage1* Message1 = Payload.GetPtr<FMyMessage1>())
-            {
-                // 処理する
-            }
-            else
-            {
-                // 未知のメッセージ. もしくは自身に関係ないメッセージ
-            }
-        };
-    }
-}
-```
-
-疎結合になり、柔軟性が増しました。型情報を使ってif分岐できますから、`enum`や`FName`を使う必要はありません。
-`UScriptStruct*` のアドレスが一意であることを利用して`TMap<const UScriptStruct*, TValue>`に突っ込むことも可能です。
-(個人的にアドレスの値を利用するのは邪悪だと思っていますが)
-
-## プラグインやライブラリに最適
-
-具象型を隠蔽できるということは、ユーザー側に型注入させることができるということです。
-
-これはライブラリやプラグイン開発者にとっては可用性やユーザーカスタムの柔軟性を大きく広げます。
-実際に`StateTree`等のエンジンプラグインでは `FInstancedStruct`による具象型の隠蔽が行われています。
-
-プラグイン開発時点ではユーザー側のゲームコードに依存することはできません。なぜならば、まだその実装がないからです。
-そこで、いくつかの対策が取られてきました。
-
-* `IDataProvider` のように プラグイン側で`interface`を定義してユーザーに実装させる作戦
-* `FCustomDataBase`のように プラグイン側でベースクラスを用意してユーザー側に継承してもらう作戦
-* `int64`や`void*`といった固定長のユーザーデータ型を用意する作戦
-* `JSON`など構造化された文字列にしてパースする作戦
-
-継承だとvirtual関数の設計の仕方など対応しきれない部分がでたり、そもそもダイアモンド継承問題の危険があります。
-固定長ユーザーデータ型は、特定の用途ではサイズが不足していたり、使わない場合は無駄だったり、といった問題があります。
-文字列はデータ量増えるし、パースが遅いのもダメです。
-
-その点、`FInstancedStruct`なら、シリアライズによる永続化もできて、Replicationにも対応していて、エディタで簡単に触れますから便利ですね。
+# つづく
