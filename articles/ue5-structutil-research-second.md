@@ -3,7 +3,7 @@ title: "UE5:Unreal EngineのStructUtilについてまとめた 中編"
 emoji: "😽"
 type: "tech" # tech: 技術記事 / idea: アイデア
 topics: [ue5, cpp, unrealengine, unrealengine5]
-published: false
+published: true
 ---
 
 # はじめに
@@ -74,12 +74,12 @@ void Main()
         // 参照カウントが4に増える
         FSharedStruct Shared4 = Shared3;
 
-        Shared4 = {}; // 参照カウントが3に減る
-    } // 参照カウントが2に減る
+        Shared4 = {}; // operator= により参照カウントが3に減る
+    } // デストラクタで参照カウントが2に減る
 
     Shared2.Reset(); // 参照カウントが1に減る
 
-}// 参照カウントが0になりデストラクタ呼び出す＆Freeされる
+}// 参照カウントが0になり~FFoo()を呼び出す＆Freeされる
 ```
 
 :::message
@@ -111,23 +111,18 @@ Writeアクセス時は気をつけてください。
 :::
 
 ## `FSharedStruct`の比較
-`operator==`で比較できます。
-ただし、アドレス比較のみです。メモリ領域のデータ比較は行いません。`nullptr`含め同じアドレスを指していたら一致します。内部では`TSharedPtr`の形で持っておりますが、参照カウンタ等は比較しませんし、`TSharedPtr`の`operator==`も使いません。
+`operator==`でアドレス比較します。メモリ領域のデータ比較は行いません。`nullptr`含め同じアドレスを指していたら一致します。内部では`TSharedPtr`の形で持っておりますが、参照カウンタ等は比較しませんし、`TSharedPtr`の`operator==`も使いません。
 
-疑似コード
-```cpp
+```cpp: 疑似コード
 TSharedPtr<FStructSharedMemory>　Ptr;
 
 bool operator==(const FSharedStruct& Other)
 {
     // ポインタの比較
-    return (Ptr->ScriptStruct == Other.Ptr->ScriptStruct) && (Ptr->Memory == Other.Ptr->Memory));
-
-    // MemCmp()ではない
+    return (Ptr->ScriptStruct == Other.Ptr->ScriptStruct)
+        && (Ptr->Memory == Other.Ptr->Memory));
 }
 ```
-汎用共有参照型であるという観点から妥当な実装だと思います。同一のメモリ領域を指しているのであれば、ちゃんと共有できており2つのインスタンスは同一であるとみなせますからね。
-
 内部データの値が同一であることを期待するような稀有な場面では注意してください。例えば、`TMap`のキーや`TSet`に入れる場合、IDの照合に使う場合などです。どこのメモリ領域にあるかよりも、内容が同じであれば振る舞いとしては同値であってほしい場面も存在します。
 
 ```cpp
@@ -180,45 +175,43 @@ void Case1()
     ensure(Found == nullptr);
 }
 ```
-共有参照型なので、自然なことだと思います。
+この仕様は汎用共有参照型であるという観点から妥当なものだと思います。同一のメモリ領域を指しているのであれば、ちゃんと共有できており2つのインスタンスは同一であるとみなせますからね。
 
 中身を比較したいなら中身の型を取り出して比較するべきでしょう。
 
 ```cpp
 bool CheckValueEqual(const FSharedStruct& Lhs, const FSharedStruct& Rhs)
 {
-    // 暗黙的に生成される FFString::operator== を利用
-    // つまり FString::operator==を利用
+    // FFString::operator== を明示的に利用
     bool ValueEqual = Lhs.Get<FFString>() == Rhs.Get<FFString>();
     return ValueEqual;
 }
 ```
-`FString`を `FName`や`FGuid`に置き換えた方が分かりやすいかも。値の同一性が重要視される場面では気をつけて。
 
 ## `FSharedStruct`のハンドリング
 
 共有参照が必要なときは`const&`渡しがお勧めです。値渡しの場合は一時オブジェクトにより参照カウントが増えるので、無駄なオーバーヘッドが発生します。
 
-```cpp
+```cpp: const&ハンドリング
 FSharedStruct SharedData;
 
 // const& で受け取る
-void RecieveData_Good(const FSharedStruct& InSharedData)
+void RecieveData_Good(const FSharedStruct& InSharedData) //ここで参照カウントは増えない
 {
-    // 共有したり
     this->SharedData = InSharedData;
 }
 
 // 値渡しでは引数に積まれるときに参照カウントが1増える
-void RecieveData_Bad(FSharedStruct InSharedData){}
+void RecieveData_Bad(FSharedStruct InSharedData) //ここで参照カウント+1
+{
+    this->SharedData = InSharedData;
+}// ここでInSharedDataのデストラクタが発動して参照カウント-1
 ```
+参照カウントを+1して-1するだけの無駄なオーバーヘッドがいますね。
 
-### `FSharedStruct`から Viewへの変換もOK
-`FStructView`/ `FConstStructView`に変換して渡せます。
-値を使いたいだけならば、こちらでよいでしょう。Delegate型の種類を減らしたり、同じシグネチャの関数に渡せたり結構便利です。
-
-前編でも述べましたが、`FStructView`はビューなのでメモリの所有権を持ちません。`FSharedStruct`は所有権を持ちますから大きく異なります。所有権に興味がない場面においては`FStructView`渡しが適切です。
-```cpp
+### `FSharedStruct`から Viewへの変換
+`FSharedStruct`は`FStructView`/ `FConstStructView`に変換して渡せます。`implicit`変換は無いので明示的にコンストラクタに渡します。
+```cpp: Viewへ変換
 FSharedStruct SharedData;
 
 void SimpleUseData(FStructView View)
@@ -228,14 +221,16 @@ void SimpleUseData(FStructView View)
 
 void Main()
 {
-    SimpleUseData(FStructView::Make(this->SharedData));
+    SimpleUseData(FStructView::Make(SharedData));
 }
 ```
+値を使いたいだけならば、こちらでよいです。Viewを引数にとるシグネチャを持つ 関数や`Delegate`型に渡せて便利です。
+逆に`FStructView`から `FSharedStruct`へは変換できませんから、所有権に興味がない場面においては`FStructView`の値渡しが適切です。
 
 
 ## `FSharedStruct`は UPROPERTY対応
 
-`FSharedStruct`は`UPROEPRTY`対応です。`TSharedPtr<T>`はダメなのに、何気に凄い。
+`FSharedStruct`は`UPROEPRTY`対応です。`TSharedPtr<T>`は`UPROPERTY`ダメなので助かります。
 
 ```cpp
 UCLASS()
@@ -249,11 +244,11 @@ private:
 }
 ```
 
-なお`EditAnywhere`を付けても Detailsビューでは編集できませんでした。残念です。
+なお`EditAnywhere`を付けても Detailsビューでは編集できませんでした。
 
 ## `FSharedStruct`は `Blueprint` 非対応
 
-BPダメでした。 😿
+BPダメです😿
 
 > `Error  : Type 'FSharedStruct' is not supported by blueprint.`
 
@@ -273,8 +268,8 @@ void SetSharedData(FSharedStruct InSharedData);
 
 `FSharedStruct`は 共有ポインタを持つラッパーです。単純に`TSharedPtr<FInstancedStruct>`をラップしてしまうとダブルポインタ操作になってしまい、キャッシュミスが増えます。これを避けるための工夫が施されています。
 
-以下疑似コードです。色々省略すると次の通りになります。
-```cpp
+色々省略すると次の通りになります。
+```cpp: 疑似コード
 struct FSharedStruct
 {
     TSharedPtr<FStructSharedMemory> Memory;
@@ -283,10 +278,8 @@ struct FSharedStruct
 本体は`FStructSharedMemory`ですね。
 
 
-
-
 以下`FStructSharedMemory`の疑似コードです。
-```cpp
+```cpp: 疑似コード
 struct FStructSharedMemory
 {
     TObjectPtr<const UScriptStruct> ScriptStruct;
@@ -294,17 +287,17 @@ struct FStructSharedMemory
 }
 ```
 型情報とメモリ領域をもっており、`FInstancedStruct`と同じ感じです。
-ですが、長さ0の配列を持っていますね。キモイですね。
+データ領域は`uint8*`ポインタかと思いきや長さ0の配列を持っていますね。キモイですね。
 
-これは`Flexible array member`パターンというものです。C言語ではC99でサポートされていますが、C++では正式サポートされてたかよくわかりませんでした。でもまぁ動いているんでサポートされているんでしょう！
+こちらは`Flexible array member`パターンというものです。C言語ではC99でサポートされていますが、C++では正式サポートされてたかよくわかりませんでした。でもまぁ動いているんでサポートされているんでしょう！(しらね)
 
 フレキシブル配列ですが、次のような雰囲気でメモリ確保します。
 理解を助けるために簡単化した疑似コードです。
 
-```cpp
+```cpp: 疑似コード
 //1. メモリ確保
 const int32 ToalMemSize = sizeof(FStructSharedMemory) + sizeof(T);
-uint8* AllocatedMemory = Malloc(ToalMemSize);
+uint8* AllocatedMemory = FMemory::Malloc(ToalMemSize);
 
 //2. 制御領域のオブジェクト構築
 new (AllocatedMemory) FStructSharedMemory();
@@ -326,13 +319,13 @@ return FSharedStruct(Ptr); //インスタンスできた
 ```cpp
 // 1.メモリ確保
 const int32 ToalMemSize = sizeof(FStructSharedMemory) + sizeof(T);
-uint8* AllocatedMemory = Malloc(ToalMemSize);
+uint8* AllocatedMemory = FMemory::Malloc(ToalMemSize);
 ```
 まず、`TotalMemSize`を求めましょう。
 `sizeof(TObjectPtr<T>)`は8byteです。`TObjectPtr`は生ポとサイズが一致するように厳密に実装されているからです。次に、長さ0の配列`uint8 Memory[0];`は0byteです。
 よって`sizeof(FStructSharedMemory)` は8+0=8byteです。
 
-`sizeof(T)`の部分はアラインメントも考慮されて定まります。実際は`UScriptStruct`から得られます。今回は24byteであると仮定して話を進めます。`TotalMemSize`は8+24=32byteとなりました。
+`sizeof(T)`の部分はアラインメントも考慮されて定まります。実際は`UScriptStruct`から得られます。説明のために、仮に24byteであると仮定して話を進めます。`TotalMemSize`は8+24=32byteとなりました。
 
 以下に32byte確保した様子を図示します。
 (パケット図は本当はbit表記だけどbyteで読んでください)
@@ -347,8 +340,7 @@ title AllocatedMemory
 
 ### 制御領域のオブジェクト構築
 次に配置newこと`placement new` でメモリ領域にオブジェクトを構築していきます。
-構築は2回行います。最初は制御領域である`FStructSharedMemory`部分を構築します。先頭アドレスから `sizeof(FStructSharedMemory)` 分構築します。
-`sizeof(FStructSharedMemory)` は8byteでしたね。
+構築は2回行います。最初は制御領域である`FStructSharedMemory`部分を構築します。先頭アドレスから `sizeof(FStructSharedMemory)` 分構築します。`sizeof(FStructSharedMemory)` は8byteでしたね。
 
 
 ```cpp
@@ -412,9 +404,8 @@ title AllocatedMemory
 
 上図の`FSharedStruct::TSharedPtr<T>::Ptr`の部分が `AllocatedMemory`の先頭を指しています。
 
-カスタムデリータは本質ではないので、疑似コードです。`Malloc`の返り値をつかって`Free`しましょうね、というものです。
-実際はラムダ式ではありません。
-```cpp
+カスタムデリータは本質ではないので、疑似コードです。`Malloc`の返り値をつかって`Free`します。実際はラムダ式ではありませんが、雰囲気が分かればいいでしょう。
+```cpp: 疑似コード
 auto CustomDeleter = [=AllocatedMemroy]()
 {
     FMemory::Free(AllocatedMemory);
@@ -422,13 +413,13 @@ auto CustomDeleter = [=AllocatedMemroy]()
 ```
 
 ### なぜこんな面倒くさいことをしているのか
-`Flexible array member`パターンを利用することで、制御ブロック含め連続したメモリ領域に確保することでキャッシュヒット率をあげたいからです。素直に `TSharedPtr<FInstancedStruct>`を使ってしまうと、ダブルポインタのダブルデリファレンスにより2連続でload命令が発生する可能性がとても高く損です。
+`Flexible array member`パターンを利用することで、制御ブロック含め連続したメモリ領域に確保することでキャッシュヒット率をあげたいからです。素直に `TSharedPtr<FInstancedStruct>`を使ってしまうと、ダブルポインタのダブルデリファレンスにより2連続で`load`命令が発生する可能性がとても高いです。
 
-1. `TSharedPtr<FInstancedStruct>::Ptr` のデリファレンスとload命令
-2. `FInstancedStruct::Memory`のデリファレンスとload命令
+1. `TSharedPtr<FInstancedStruct>::Ptr` のデリファレンスと`load`命令
+2. `FInstancedStruct::Memory`のデリファレンスと`load`命令
 
-具体的に`TSharedPtr<FInstancedStruct>`を使ったとき、を考えます。
-```cpp
+具体的に`TSharedPtr<FInstancedStruct>`を使ったときを考えます。
+```cpp: ダブルデリファレンス
 TSharedPtr<FInstancedStruct> SharedPtr;
 // 1回目のデリファレンス
 FFoo* FooPtr = SharedPtr->GetPtr<FFoo>();
@@ -436,7 +427,7 @@ FFoo* FooPtr = SharedPtr->GetPtr<FFoo>();
 (*FooPtr) = FFoo(100);
 ```
 
-上記はそれぞれがMallocしているため、別々のヒープに確保される可能性が高いです。
+上記はそれぞれが`Malloc`しているため、別々のヒープに確保される可能性が高いです。
 `SharedPtr::Ptr`の指すアドレスが`0x12345678_00000000`だとしたら`FooPtr` の指すアドレスは`0xdeadbeaf_ffffffff`ぐらい離れているかもわかりません。
 L1キャッシュサイズよりも離れていたらL2キャッシュから、そこよりも離れていたらL3キャッシュ...　とloadされるでしょう。間に4kテクスチャやvoiceデータが挟まっていたらどれだけ離れるか見当もつきません。
 
@@ -448,7 +439,7 @@ TSharedPtr<FInstancedStruct>
                                      └── Memory (0xdeadbeaf_ffffffff) [FFoo]
 ```
 
-では FSharedStructの場合はどうでしょうか？
+では `FSharedStruct`の場合はどうでしょうか？
 ```cpp
 FSharedStruct SharedData = FSharedStruct::Make<FFoo>();
 // 1回目のデリファレンス
@@ -458,7 +449,7 @@ FFoo* FooPtr = SharedData.GetPtr<FFoo>();
 ```
 
 デリファレンス自体は2回発生していますね。ただし、2回目のデリファレンスでは、すぐ近くを指します。`FSharedStruct::Ptr`の指すアドレスが`0x12345678_00000000`だとしたら`FooPtr` の指すアドレスは`0x12345678_00000008`です。
-これだけ近いとキャッシュラインにのっており、data prefetchでロード済みであろうから、L1キャッシュに高確率でキャッシュヒットするため、あっという間に実行されるはずです。
+これだけ近いとキャッシュラインにのっており、`data prefetch`により一緒に`load`済みであろうから、L1キャッシュに高確率でキャッシュヒットするはず。あっという間に`FFoo`本体へ書き込みが実行されるでしょう。
 
 ```
 FSharedStruct
@@ -487,7 +478,7 @@ FSharedStruct
 `FSharedStruct`と全く一緒です。
 なぜならば`FSharedStruct::Make`, `FSharedStruct::InitializeAs`を使っているからです。
 
-```cpp
+```cpp: 初期化
 TSharedStruct<FFoo> SharedData = TSharedStruct<FFoo>::Make();
 
 TSharedStruct<FFoo> SharedData;
@@ -501,8 +492,15 @@ SharedData.InitializeAs<FFoo>();
 
 ## TSharedStructの読み書き
 `FSharedStruct`と一緒です。
+静的型付けされているため、`template`パラメータは省略可能です。
 
-静的型付けされているため、型パラメータは省略可能です。
+```cpp: 読み書き
+TSharedStruct<FFoo> SharedData = TSharedStruct<FFoo>::Make();
+// templateパラメータを省略するとデフォルトパラメータでFFooが渡される
+FFoo& Foo = SharedData.Get(); 
+```
+型推論ではなく[テンプレートパラメータのデフォルト引数](https://cpprefjp.github.io/lang/cpp17/allow_default_template_arguments_of_variable_templates.html)機能です。
+
 
 ## TSharedStructの比較
 `FSharedStruct`と全く一緒です。アドレス比較です。
@@ -523,12 +521,16 @@ using FStatusCode = TSharedStruct<FHttpStatus>;
 static const FStatusCode NotFound = FStatusCode::Make(404);
 void OnReceive(const FStatusCode& StatusCode)
 {
-    if(StatusCode == NotFound)
+    if(StatusCode == NotFound) // 論理的にbug
     {
-        // 値が404でもアドレスが違えばここには来ない...
+        // 値が404でもアドレスが違うのでここには来ない...
     }
 }
 
+void Publish404()
+{
+    OnReceive(FStatusCode::Make(404));
+}
 ```
 ---
 # `TSharedStruct<T>` 詳解
@@ -574,7 +576,7 @@ static_assert(std::is_standard_layout_v<TSharedStruct<FFoo>>);
 というわけで、`TSharedStruct<T>`は なぜ`FSharedStruct`として扱っていいのかという答えがここにあります。
 > `reinterpret_cast`で最初の非静的メンバーを指すポインタへ変換しても合法
 
-```cpp: 再掲
+```cpp: first non-static data member
 struct TSharedStruct
 {
     FSharedStruct Struct;
@@ -588,14 +590,15 @@ void Main()
     FSharedStruct* Ptr0 = &Data.Struct;
 
     // standard_layoutなら合法
+    // オブジェクトのfirst non-static data memberへはreinterpret_castできる
     FSharedStruct* Ptr1 = reinterpret_cast<FSharedStruct*>(&Data);
     ensure(Ptr0 == Ptr1);
 }
 ```
 
-# 共有ポインタ対応表
+# 共有参照カウント式スマートポインタ対応表
 
-以下の通り対応表が出揃いました。
+`FSharedStruct`の登場により対応表が出揃いました。
 
 |ベース型 | 共有コンテナ型 | 
 | --- | --- |
@@ -603,8 +606,8 @@ void Main()
 | `USTRUCT*`型 | `FSharedStruct` |
 | `Native*`型  | `TSharedPtr<FNative>` |
 
-`UObject*` に対する参照カウント方式共有参照は `TStrongObjectPtr<T>`、
-`USTRUCT*` に対する参照カウント方式共有参照は `FSharedStruct`、
+`UObject*` に対する参照カウント方式共有参照は `TStrongObjectPtr<T>`
+`USTRUCT*` に対する参照カウント方式共有参照は `FSharedStruct`
 `Native`型に対する参照カウント方式共有参照は `TSharedPtr<T>`です。
 
 ---
