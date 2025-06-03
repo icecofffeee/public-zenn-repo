@@ -196,13 +196,13 @@ bool CheckValueEqual(const FSharedStruct& Lhs, const FSharedStruct& Rhs)
 FSharedStruct SharedData;
 
 // const& で受け取る
-void RecieveData_Good(const FSharedStruct& InSharedData) //ここで参照カウントは増えない
+void ReceiveData_Good(const FSharedStruct& InSharedData) //ここで参照カウントは増えない
 {
     this->SharedData = InSharedData;
 }
 
 // 値渡しでは引数に積まれるときに参照カウントが1増える
-void RecieveData_Bad(FSharedStruct InSharedData) //ここで参照カウント+1
+void ReceiveData_Bad(FSharedStruct InSharedData) //ここで参照カウント+1
 {
     this->SharedData = InSharedData;
 }// ここでInSharedDataのデストラクタが発動して参照カウント-1
@@ -221,7 +221,7 @@ void SimpleUseData(FStructView View)
 
 void Main()
 {
-    SimpleUseData(FStructView::Make(SharedData));
+    SimpleUseData(FStructView(SharedData));
 }
 ```
 値を使いたいだけならば、こちらでよいです。Viewを引数にとるシグネチャを持つ 関数や`Delegate`型に渡せて便利です。
@@ -476,7 +476,7 @@ FSharedStruct
 
 ## `TSharedStruct<T>`の作成
 `FSharedStruct`と全く一緒です。
-なぜならば`FSharedStruct::Make`, `FSharedStruct::InitializeAs`を使っているからです。
+新たな共有メモリを確保して、その領域を与えられた引数で構築します。引数は捨てて構いません。
 
 ```cpp: 初期化
 TSharedStruct<FFoo> SharedData = TSharedStruct<FFoo>::Make();
@@ -485,7 +485,7 @@ TSharedStruct<FFoo> SharedData;
 SharedData.InitializeAs<FFoo>();
 ```
 
-新たな共有メモリを確保して、その領域を与えられた引数で構築します。引数は捨てて構いません。
+APIも性能も全く一緒です。なぜならば、`TSharedStruct::Make`と`TSharedStruct::InitializeAs`は内部で`FSharedStruct::Make`, `FSharedStruct::InitializeAs`を使っているからです。
 
 ## TSharedStructの破棄
 `FSharedStruct`と全く一緒です。
@@ -568,13 +568,13 @@ static_assert(std::is_standard_layout_v<TSharedStruct<FFoo>>);
 
 `standard_layout`だと何がうれしいのかというと、
 
-1. `EBO:Empty base optimization`の条件を1つ満たします
-1. `this`を`reinterpret_cast`で最初の非静的メンバーを指すポインタへ変換しても合法です
-1. `offsetof` が合法的に使えます
-1. `ABI:Application Binary Interface`を満たします
+1. `EBO:Empty base optimization`の条件を1つ満たす
+1. `this`を`reinterpret_cast`で最初の非静的メンバーを指すポインタへ合法的に変換できる
+1. `offsetof` が合法的に使える
+1. `ABI:Application Binary Interface`を満たす
 
-というわけで、`TSharedStruct<T>`は なぜ`FSharedStruct`として扱っていいのかという答えがここにあります。
-> `reinterpret_cast`で最初の非静的メンバーを指すポインタへ変換しても合法
+`TSharedStruct<T>`は なぜ`FSharedStruct`として扱っていいのかという答えがここにあります。
+> `reinterpret_cast`で最初の非静的メンバーを指すポインタへ合法的に変換できる
 
 ```cpp: first non-static data member
 struct TSharedStruct
