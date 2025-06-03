@@ -859,10 +859,10 @@ void Use(FInstancedStruct& InstancedStruct)
 `FInstancedStruct` のコピーはメモリをDeepCopyしていました。
 `FConstStructView`は コピーせずに同じメモリ領域への`readonly`参照を提供します。
 
-`Make`関数で作成できます。
+コンストラクタの引数に渡すことで作成できます。
 ```cpp
 FInstancedStruct Instance;
-FConstStructView View = FConstStructView::Make(Instance);
+FConstStructView View = FConstStructView(Instance);
 ```
 
 小さなオブジェクトなので オブジェクトの値渡しでＯＫです。下手に参照渡しにするよりも値渡しでＯＫです。ビューですから。
@@ -875,11 +875,11 @@ static void PassByRValue(FConstStructView&& RefView){} //転送する意義が�
 static void Main()
 {
     FInstancedStruct Instance;
-    FConstStructView View = FConstStructView::Make(Instance);
+    FConstStructView View = FConstStructView(Instance);
     PassByValue(View);
 
     // ワンライナーで渡すことが多いかも
-    PassByValue(FConstStructView::Make(Instance));
+    PassByValue(FConstStructView(Instance));
 }
 ```
 
@@ -900,9 +900,7 @@ TQueue<FInstancedStruct> Queue;
 void Enqueue(FConstStructView PayloadView)
 {
     // コンストラクタでビューからコピー
-    FInstancedStruct Copy(PalyloadView);
-    // Make関数でビューからコピー
-    FInstancedStruct Copy = FInstancedStruct::Make(PalyloadView);
+    FInstancedStruct Copy = FInstancedStruct(PalyloadView);
     Queue.Enqueue(Copy);
 
     // FConstStructViewからFInstancedStructへの暗黙的な型変換はできない
