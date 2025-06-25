@@ -12,6 +12,7 @@ StructUtilシリーズ第三弾です。
 
 * [UE5:Unreal EngineのStructUtilについてまとめた 前編](https://zenn.dev/allways/articles/ue5-structutil-research)
 * [UE5:Unreal EngineのStructUtilについてまとめた 中編](https://zenn.dev/allways/articles/ue5-structutil-research-second)
+* [UE5:Unreal EngineのStructUtilについてまとめた 後編](https://zenn.dev/allways/articles/ue5-structutil-research-third)
 
 # StructUtilの主要型
 再掲。
@@ -24,7 +25,7 @@ StructUtilシリーズ第三弾です。
 * `FConstSharedStruct`
 * `TSharedStruct<T>`
 * `TConstSharedStruct<T>`
-* `FStructArrayView` <- 本稿
+* `FStructArrayView`
 * `FConstStructArrayView`
 * `FInstancedStructContainer`
 
@@ -753,16 +754,16 @@ void Main()
     }
 }
 ```
-どちらも連続したメモリブロックに確保されるためキャッシュ効率は概ね同じです。
+どちらも連続したメモリブロックに確保されるためキャッシュ効率は概ね同じかと思います。
 
 ---
 # `StructUtil` の ユースケース
 
-構造体の取り回しをよくする機能であるので、差さるところには非常に差さります。
+構造体の取り回しをよくする機能です。差さるところには非常に差さります。
 
-## 使いどころ1: メッセージのPub/Sub
+## 使いどころ1: メッセージの`Pub`/`Sub`
 具象型が隠蔽できるため、任意の型をペイロードとして載せることが可能です。
-Publisher側は`view`を使ってコピーレスにBroadcastすることができます。
+`Publisher`側は`view`を使ってコピーレスに`Broadcast`することができます。
 
 ```cpp: publisher.cpp
 struct FPublisher

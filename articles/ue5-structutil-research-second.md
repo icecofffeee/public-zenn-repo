@@ -12,6 +12,7 @@ StructUtilシリーズ第二弾です。
 
 * [UE5:Unreal EngineのStructUtilについてまとめた 前編](https://zenn.dev/allways/articles/ue5-structutil-research)
 * [UE5:Unreal EngineのStructUtilについてまとめた 中編](https://zenn.dev/allways/articles/ue5-structutil-research-second)
+* [UE5:Unreal EngineのStructUtilについてまとめた 後編](https://zenn.dev/allways/articles/ue5-structutil-research-third)
 
 # StructUtilの主要型
 再掲。
@@ -26,6 +27,7 @@ StructUtilシリーズ第二弾です。
 * `TConstSharedStruct<T>`
 * `FStructArrayView`
 * `FConstStructArrayView`
+* `FInstancedStructContainer`
 
 ひとつずつ触れていきましょう。
 

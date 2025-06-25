@@ -18,6 +18,7 @@ published: true
 
 * [UE5:Unreal EngineのStructUtilについてまとめた 前編](https://zenn.dev/allways/articles/ue5-structutil-research)
 * [UE5:Unreal EngineのStructUtilについてまとめた 中編](https://zenn.dev/allways/articles/ue5-structutil-research-second)
+* [UE5:Unreal EngineのStructUtilについてまとめた 後編](https://zenn.dev/allways/articles/ue5-structutil-research-third)
 
 # `StructUtil`とは
 
@@ -92,8 +93,11 @@ class UMyObject : public UObject
 * `FConstStructView`
 * `FSharedStruct`
 * `FConstSharedStruct`
+* `TSharedStruct<T>`
+* `TConstSharedStruct<T>`
 * `FStructArrayView`
 * `FConstStructArrayView`
+* `FInstancedStructContainer`
 
 ひとつずつ触れていきましょう。
 
