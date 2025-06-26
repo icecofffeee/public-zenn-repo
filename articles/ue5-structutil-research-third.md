@@ -134,11 +134,11 @@ void WriteData(FStructArrayView Array)
 ```cpp: read/write
 void WriteData(FStructArrayView Array)
 {
-    for(int i=0; i < OutArray.Num(); ++i)
+    for(int i=0; i < Array.Num(); ++i)
     {
         // nullptrは型指定を間違えたとき返ってくる
         // 元が配列なのでデータ領域は必ず存在しているから純粋なnullptrはありえない
-        if(FFoo* Foo = OutArray.GetPtrAt<FFoo>(i))
+        if(FFoo* Foo = Array.GetPtrAt<FFoo>(i))
         {
             Foo->Position = FVector(1,2,3);
         }
@@ -161,9 +161,9 @@ void WriteData(FStructArrayView Array)
     }
 
     // N回の型判定
-    for(int i=0; i < OutArray.Num(); ++i)
+    for(int i=0; i < Array.Num(); ++i)
     {
-        if(FFoo* Foo = OutArray.GetPtrAt<FFoo>(i)){}
+        if(FFoo* Foo = Array.GetPtrAt<FFoo>(i)){}
     }
 ```
 
@@ -243,7 +243,7 @@ struct FStructArrayView
 
 
 :::message
-実際の`ElementSize`は `sizeof<T>`ではなく `UScriptStrct::GetStructSize()`で得たサイズです。`T`を継承した`Blueprint`型は`sizeof<T>`より少し大きいのです。
+実際の`ElementSize`は `sizeof<T>`ではなく `UScriptStruct::GetStructSize()`で得たサイズです。`T`を継承した`Blueprint`型は`sizeof<T>`より少し大きいのです。
 :::
 
 `FStructArrayView`では`i`番目の要素を得るために、`ElementSize`に要素サイズつまりストライド量を覚えておき、そのストライドでポインタを操作します。
@@ -256,7 +256,7 @@ struct FStructArrayView
     T* GetPtrAt(int index)
     {
         uint8* DataHead = static_cast<uint8*>(DataPtr); // 1
-        uint8* ElementHead = Head + (ElementSize * Index); //2
+        uint8* ElementHead = DataHead + (ElementSize * Index); //2
         void* Ptr = ElementHead; //3
         return static_cast<T*>(Ptr); //4
     }
@@ -315,7 +315,7 @@ static_assert(sizeof<FFoo>() == 8);
 static_assert(sizeof<FBar>() == 12);
 
 FBar Array[10] = {}; // 12byte * 10 =120byte
-FStructArrayView View(FArrayView(Array));
+FStructArrayView View(TArrayView(Array));
 
 // View は FBar[]である
 FBar& Bar = View.Get<FBar>(); // ok
@@ -479,9 +479,12 @@ class UHoge: public UObject
 # `FInstancedStructContainer`
 真の汎用配列です。このコンテナは、`TArray<FInstancedStruct>`の代替として、より高いパフォーマンスが求められる場面で使用されます。異なる型の構造体を連続したメモリブロックに確保します。これによりメモリアクセスの局所性が高まりキャッシュ効率が向上します。
 
-要素の追加・削除はメモリ全体の再配置が必要になるためコストが高いです。
-そのため、単一要素の`Add`はなく、一括追加の`Append`しかありません。
-`ReserveBytes`であらかじめ必要なメモリ量を確保して、`Append`で要素を書きこむ、というものです。
+具体的にはデータ指向で設計された部分かつ、大量に捌きたい箇所で有効です。特にNPC-AIエージェント処理を目的とするStateTreeにおいては従来の Blackboardアーキテクチャと比較して、知識情報をデータ指向に扱うことで処理速度向上を図っています。
+
+* Mass Framework 全般
+* SmartObject のユーザーデータ
+* StateTree の 
+* ZoneGraph のスロットデータ
 
 ## `FInstancedStructContainer`の メモリレイアウト
 疑似コードです。
@@ -533,7 +536,7 @@ void Main()
 }
 ```
 ## `FInstancedStructContainer`の要素の追加
-効率のため`ReserveBytes` でメモリ確保して`Append`で一気に要素を書き込みます。
+効率のため`ReserveBytes` でメモリ確保して`Append`で一気に要素を書き込みます。要素の挿抜はメモリ全体の再配置が必要になるためコストが高いです。そのため、単一要素の`Add`はなく、一括追加の`Append`しかありません。
 
 `Append`は受け付ける型が非常に厳しく、`TConstArrayView<FInstancedStruct>` か `TConstArrayView<FConstStructView>`のいずれかです。
 1つだけ`Append`したいときは長さ1の`TConstArrayView`に包んでください。
@@ -554,7 +557,7 @@ struct FFoo64
     UPROPERTY() int32 Value0{};
     UPROPERTY() int32 Value1{};
 }
-static_assert(sizeof(FFoo32) == 8);
+static_assert(sizeof(FFoo64) == 8);
 
 void WriteData()
 {
@@ -570,9 +573,13 @@ void WriteData()
         };
     TConstArrayView<FInstancedStruct> InstancedStructView(InstancedStructArray);
     Container.Append(InstancedStructView);
+
+    // TArrayはimplicitに TConstArrayViewになれるのでそのまま与えられます
+    Container.Append(InstancedStructArray);
 }
 ```
-AppendはDeepCopyしますので、入力に与えたデータは破棄して構いません。
+
+AppendはデータをCopyしますので、入力に与えたデータは破棄して構いません。
 
 このときのデータレイアウトは大体次の通りとなります。(アラインメント次第)
 
@@ -589,8 +596,8 @@ Memory                                                         Memory + 88 byte
 `RemoveAt`で削除します。削除したら隙間を埋めるべく要素の移動が行われます。メモリのリアロックは行いません。可能ならば末尾から削除すると要素の移動がなくて効率的です。
 
 ```cpp
-Conatiner.RemoveAt(1); // FFoo64を削除
-Conatiner.RemoveAt(2); // FFoo64が2番目に移動して来ているので削除
+Container.RemoveAt(1); // FFoo64を削除
+Container.RemoveAt(2); // FFoo64が2番目に移動して来ているので削除
 ```
 このときのデータレイアウトは次の通りとなります。
 
@@ -726,7 +733,7 @@ void Main()
         VDamageEvent.Emplace<FDamageEvent>(FDamageEvent{});
 
         TArray<TVariant<FHitResult, FDamageEvent>> VariantArray;
-        VariantArray.Reseve(5); // 264 * 5 byte
+        VariantArray.Reserve(5); // 264 * 5 byte
         VariantArray.Add(VHitResult);
         VariantArray.Add(VHitResult);
         VariantArray.Add(VDamageEvent);
@@ -780,7 +787,7 @@ struct FPublisher
             FFoo& Foo2 = View.Get();
             ensure(&Foo == &Foo2);
 
-            Delegate.BroadCast(View);
+            Delegate.Broadcast(View);
         } //Fooの寿命を迎えたのでメモリは解放される
 
         {
@@ -788,13 +795,13 @@ struct FPublisher
             TUniquePtr<FFoo> Foo = MakeUnique<FFoo>();
             FStructView View(Foo::StaticStruct(), Foo.Get());
 
-            Delegate.BroadCast(View);
+            Delegate.Broadcast(View);
         }
 
         {
             // メンバーフィールドからビューを作る
             FStructView View(Foo::StaticStruct(), &this->Foo);
-            Delegate.BroadCast(View);
+            Delegate.Broadcast(View);
         }
     }
 }
@@ -834,7 +841,7 @@ void Consume_GameThread()
 // MyMessageSubsystem.h
 
 // 具象型に依存しないコンテナ型としてペイロードを定義できる
-DECLARE_DELEGATE_OneParam(FOnMessageRecieved, const FInstancedStruct&);
+DECLARE_DELEGATE_OneParam(FOnMessageReceived, const FInstancedStruct&);
 
 // 型を絞りたいならベース型を指定してもよい
 DECLARE_DELEGATE_OneParam(FOnMessageBaseRecieved, const TInstancedStruct<FMyMessageBase>&);
@@ -845,7 +852,7 @@ class UMyMessageSubsystem : UWorldSubsystem
 {
     GENERATED_BODY()
 
-    FOnMessageRecieved Recieved;
+    FOnMessageReceived Received;
 }
 
 // Subscriber.cpp
@@ -858,8 +865,8 @@ class ASubscriber : public AActor
 {
     virtual void BeginPlay()
     {
-        UMyMessageSubssytem* MessageSystem;
-        MessageSystem->Recieved = [](const FInstancedStruct& Payload)
+        UMyMessageSubsystem* MessageSystem;
+        MessageSystem->Received = [](const FInstancedStruct& Payload)
         {
             if(const FMyMessage0* Message0 = Payload.GetPtr<FMyMessage0>())
             {
@@ -899,35 +906,29 @@ class ASubscriber : public AActor
 
 その点、`FInstancedStruct`なら、シリアライズによる永続化もできて、Replicationにも対応していて、エディタで簡単に触れて便利ですね。
 
-実際に`StateTree`等のエンジンプラグインでは `FInstancedStruct`による具象型の隠蔽が行われています。
-`StateTree`で自由にパラメータを設定できるのは `StructUtil`の機能のおかげなのです。
+実際に`StateTree`や`SmartObject`等のエンジンプラグインでは `FInstancedStruct`による具象型の隠蔽が行われています。
+`StateTree`で自由にパラメータを設定できたり、`SmartObject`に任意のユーザーデータを付与できるのは `StructUtil`の機能のおかげなのです。
 
 # まとめ
 
 前編、中編、後編と長きにわたり解説しました。
 
-## `StructUtil`が解決した課題
+`StructUtil`は、型消去とリフレクションを駆使した汎用データ型を提供するプラグインであったということが分かりました。汎用データ側を扱う`union`や `TVarint`といった従来手法には弱点が沢山ありUnreal C++では滅多に使えませんでした。これらの問題が `FInstancedStruct`によって丸っと解決されました。
 
-これまで具象型に依存しない汎用のデータホルダー実装手法として、`union`や `TVarint`がありました。しかしながら、弱点が沢山ありUnreal C++では滅多に使えませんでした。
-
-  * 内部データ型を知るために`enum`や `FName`を使って`switch-case`する必要がある
-  * コーディングをミスるとアクセス違反してしまう
-  * 誤った型を入力することができて、コンパイル時に検知できない
-  * メモリ確保量が型T1,T2...の中から最大のものとなる
-  * **BP非対応**
-  * **`UPROPERTY`非対応**
-
-これらの問題を解決したのが `StructUtil`および`FInstancedStruct`です。
-
-  * 静的型付け
-  * 実行時型チェック
-  * **BP対応**
-  * **UPROPERTY対応**
-    * シリアライズ
-    * UPROPERTY修飾子
-  * エディタ拡張対応
-    * Detialsビューでstructを選択できる
+|             | `union`/`TVariant`               | `FInstnacedStruct`                           |
+| ----        | -------------------------------- | -------------------------------------------- |
+| 型判定       |`enum`,`FName`などによる`switch`文 | `ScriptStruct` による判定  | 
+| 型安全性     | 誤ったキャストによるアクセス違反を静的・動的に検知できない    | コンパイル時チェックと`check()`による実行時チェック |
+| メモリサイズ  | 「最大サイズの型」に合わせた ムダなメモリ確保        | 無駄メモリなし |
+| Unreal 連携　| Blueprint / UFUNCTION / UPROPERTY 非対応    | 全て対応 |
 
 
+:::message
+みんな`Util`なんて曖昧な名前を使うのはやめようね！
+:::
 
+# 資料
 
+`Engine/Source/Developer/StructUtilsTestSuite/` にテストコードがあります。詳しい使い方はそちらをご参照ください。
+
+[Test Automation](https://dev.epicgames.com/documentation/ja-jp/unreal-engine/run-automation-tests-in-unreal-engine)経由で実行可能ですので、IDEでブレイクポイントを張りながら変数の中身を見るのもよいでしょう。
