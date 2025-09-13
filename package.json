@@ -18,6 +18,7 @@
   },
   "homepage": "https://github.com/icecofffeee/public-zenn-repo#readme",
   "dependencies": {
+    "npm": "^11.5.1",
     "zenn-cli": "^0.1.161"
   }
 }
