@@ -82,7 +82,7 @@ class UMyObject : public UObject
 ハードオブジェクトポインタは static メンバー変数にできません。
 コンパイルエラーになります。
 `UPROPERTY() static inline UObject* Pointer{};`
-![static member](/images/ue5-unrealcpp-ptr-second/uproperty_static_pointer.png)
+![](/images/ue5-unrealcpp-ptr-second/uproperty_static_pointer.png)
 
 ### Hard Object Pointerは使わない
 もう使いません。必ず`TObjectPtr<T>`に乗り換えましょう。
