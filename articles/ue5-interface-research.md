@@ -9,9 +9,9 @@ published: false
 # はじめに
 Unreal Engine 5 の `interface`機能とくに `UInterface`についてまとめます。
 
-個人的に `UInterface`について理解が足らないと感じており、いまいちどう書けばいいのか、使いどころや選定基準が曖昧であったため、自己学習および将来の自分のためのメモとしてまとめることとします。
-
+個人的に `UInterface`について理解が足らないと感じており、いまいちどう書けばいいのか、使いどころや選定基準が曖昧であったため、自己学習および将来の自分のためのメモとしてまとめることとします。さんざん擦られてきた`UInterface`ですがイマイチ深く踏み込んだすべての疑問を解決してくれる記事がなかったので調べました。
 主に C++ 側での実装についてまとめます。
+
 BP側の`interface`機能については 世にある記事をご参照ください。
 
 - [【C++】インターフェース](https://zenn.dev/posita33/books/ue5_starter_cpp_and_bp_001/viewer/chap_03_cpp-interface)
@@ -39,7 +39,7 @@ public:
 # UInterface の使い方
 `UInterface` とは `Unreal C++` における インターフェース機能のことです。
 
-初めに、公式ドキュメント [UnrealEngineの インターフェース](https://dev.epicgames.com/documentation/ja-jp/unreal-engine/interfaces-in-unreal-engine) をご一読ください。
+初めに公式ドキュメント [UnrealEngineの インターフェース](https://dev.epicgames.com/documentation/ja-jp/unreal-engine/interfaces-in-unreal-engine) をご一読ください。
 `UInterface`は 接頭辞`U`で始まる型と接頭辞`I`で始まる型を必要とします。
 以降、`UInterface`の使い方について述べます。
 
@@ -59,7 +59,9 @@ public:
 * 例：オレオレId型で識別されしものが実装すべきinterface
 * FFooObjectId の実際の型は主旨と無関係だから割愛.
 */
-UINTERFACE()
+struct FFooObjectId{};
+
+UINTERFACE(meta = (CannotImplementInterfaceInBlueprint))
 class MYMODULE_API UFooObjectIdProvider : public UInterface
 {
     GENERATED_BODY()
@@ -75,7 +77,8 @@ public:
 ★ポイント
 * C++でしか使わないため純粋仮想関数で定義してよい
 * `PURE_VIRTUAL`マクロは不要
-* `UINTERFAEC()` 部分には `BlueprintType`と`Blueprintable`は付与しない
+* `UINTERFACE()` 部分には `BlueprintType`と`Blueprintable`は付与しない
+* C++でしか使わないため`CannotImplementInterfaceInBlueprint` を付与してBP実装させない
 
 ## C++ Only UInterfaceの使用
 `Unreal C++`に適合した方法で使用します。
@@ -156,6 +159,7 @@ protected:
 ## C++ Only UInterfaceの保持
 
 `interface*`を保持するには`TScriptInterface`に格納します。
+弱参照で保持するには `TWeakInterfacePtr`に格納します。
 
 `UFooObjectIdProvider`は `UObject`派生型なのですが、`IFooObjectIdProvider` は`native class`ですからこのままでは`UPROPERTY()`として扱えません。そこで `TScriptInterface`に格納する必要があるのです。
 
@@ -199,31 +203,30 @@ private:
 };
 ```
 
-ラムダキャプチャするときは 基本的に`TWeakInterfacePtr`を使って弱参照でキャプチャしましょう。`TWeakInterfacePtr` はコンストラクタを使うかグローバル関数の`MakeWeakPtr<T>()`を使います。引数には`UObject*`を与えます。
+ラムダキャプチャするときは 基本的に`TWeakInterfacePtr`を使って弱参照でキャプチャしましょう。`TWeakInterfacePtr` はコンストラクタか`operator=`を使います。引数には`Interface*`を与えます。
 
 ```cpp
 void UFooObjectManager::FooAsync()
 {
     // 1. コンストラクタ を使う oneliner
-    DoAsync([Weak = TWeakInterfacePtr(ManagedObject.GetObject())]()
+    DoAsync([Weak = TWeakInterfacePtr(ManagedObject.GetInterface())]()
     {
         if(IFooObjectIdProvider* Provider = Weak.Get()){...}
     });
 
-    // 2. MakeWeakObjectPtr<T>() を使う oneliner
-    DoAsync([Weak = MakeWeakObjectPtr(ManagedObject.GetObject())]()
-    {
-        if(IFooObjectIdProvider* P = Weak.Get()){...}
-    });
-
-    // 3. operator= を使う
-    TWeakInterfacePtr<IFooObjectIdProvider> Weak2 = ManagedObject.GetObject();
+    // 2. operator= を使う
+    TWeakInterfacePtr<IFooObjectIdProvider> Weak2 = ManagedObject.GetInterface();
     DoAsync([Weak2]()
     {
         if(IFooObjectIdProvider* P = Weak2.Get()){...}
     });
 }
 ```
+
+* `TObjectPtr<U>` ←→ `TScriptInterface<T>`
+* `TWeakObjectPtr<U>` ←→ `TWeakInterfacePtr<T>`
+
+`TScriptInterface` は内部に`UObject*`をもっていますので、`UPROPERTY()`であるかぎりGCを妨げることができる優れものです。
 
 ## C++ Only UInterfaceの実装
 `interface`の実装は2番目以降に継承します。
@@ -249,18 +252,14 @@ private:
 };
 ```
 2番目以降に`interface`を継承せねばならないのはおそらくシリアライズ処理の関係です。
-`this`ポインタを`UObject*`にc-styleキャストしたりするのでメモリレイアウト上`UObject`が先に来ないと困るからと思われます。多分。知らんけど。自信ない。
+`this`ポインタを`UObject*`にc-styleキャストしたりするのでメモリレイアウト上`UObject`が先に来ないと困るからと思われます。
 
 # 2: BP Callable UInterface
 
-便宜上、「C++で実装してBPから使うだけのUInterface」のことを`BP Callbale UInterface`と呼称しましょう。BPから関数を呼び出すだけでBP実装はしない`interface`です。
+便宜上、「C++で実装してBPから使うだけのUInterface」のことを`BP Callable UInterface`と呼称しましょう。BPから関数を呼び出すだけでBP実装はしない`interface`です。
 
 BP側は具象型に依存する必要がなくなるため、C++側での実装変更が容易になります。全BPの親クラス差し替えやリコンパイルは大変なので、BP側は具象型ではなく`interface`依存にしておくと将来楽になれるはずです。
-
-::: message
-結論から言うと、できるっちゃできるけど制限が強くて実質できない寄りです。
-後述の `Interface Message`ノードによるBPからの関数呼び出しは可能なのですが、なぜかBP変数に保持できないのであなたが期待している使い方ができないことが多く、できないと表現した方が良いというニュアンスでできません。
-:::
+BPコンパイル時間も速くなるようです。
 
 ## BP Callable UInterfaceの定義
 
@@ -270,7 +269,7 @@ BP側は具象型に依存する必要がなくなるため、C++側での実装
 ```cpp
 #include "CoreMinimal.h"
 
-UINTERFACE(BlueprintType, NotBlueprintable)
+UINTERFACE(BlueprintType, meta=(CannotImplementInterfaceInBlueprint))
 class UBuffStatusProvider : public UInterface
 {
     GENERATED_BODY()
@@ -290,22 +289,23 @@ public:
 ```
 ★ポイント
 
-* `UINTERFACE(BlueprintType, NotBlueprintable)`なclass
+* `UINTERFACE(BlueprintType, meta=(CannotImplementInterfaceInBlueprint))`なclass
+* `NotBlueprintable`は使わない
 * `UFUNCTION(BlueprintCallable)` な純粋仮想関数
 
-`UINTERFACE(BlueprintType, NotBlueprintable)`でBPでoverrideできないことを明言しています。
+`UINTERFACE(BlueprintType, meta=(CannotImplementInterfaceInBlueprint))`でBPでの使用・変数・`Cast`できるけど、`interface`を実装したり`override`できないことを明言しています。
 
-`NotBlueprintable` はこのインターフェースの実装をBP上で`override`できないことを宣言しています。より厳密にいえば、BP側でこのインターフェースの実装はできるが`override`はできない、という状態です。今回は C++で実装してBPからは関数呼び出しだけをできるように制限したい事例ですので適切です。
+`BlueprintType`はこのインターフェースがBP上で変数として保持できるようにするため付与しています。BP変数は`TScriptInterface<T>`として保持されるようです。
 
-`BlueprintType`はこのインターフェースがBP上で変数として保持できることを期待して付与しています。しかしながらなぜか、`NotBlueprintable`が付与されていると保持できないようです。エンジンバグなのか仕様なのかよくわかりません。残念。
+`CannotImplementInterfaceInBlueprint` でこのインターフェースの実装をBPでできなくします。BPの `ClassSettings` > `Implement interface`欄のリストに表示されません。今回は C++で実装してBPからは関数呼び出しだけをできるように制限したい事例ですので適切です。
 
-実装できるけど`override`できないというのは、BPの `ClassSettings` > `Implement interface`で実装するインターフェースには選ぶことはできる、という意味です。ただし、`IsPoison()`関数は純粋仮想関数ですので BPによる`override`実装はできません。`override`するとBPコンパイルエラーとなります。実装はできているので 当該BPクラスに対して `InterfaceMessage`経由での`IsPoison()`呼び出しは可能です(後述)。
+`NotBlueprintable`でもBP実装は防げるのですが、`Cast`やBP変数への保持ができなくなります。それは使い勝手が悪いので`CannotImplementInterfaceInBlueprint`の方がよいです。
 
 BPに公開したい関数に`UFUNCTION(BlueprintCallable)` を付与します。
 純粋仮想関数をBP上からメッセージ経由で適切に呼び出せるようになります。
 
 :::message
-interfaceのAPIは、実際のゲーム開発では`FGameplatTag`を使ったり、Delegateでイベント駆動にするなどもっと汎用的な`interface`にした方がいいです。例なので色々省略してます。
+interfaceのAPIは、実際のゲーム開発では`FGameplayTag`を使ったり、Delegateでイベント駆動にするなどもっと汎用的な`interface`にした方がいいです。例なので色々省略してます。
 :::
 
 
@@ -322,21 +322,19 @@ if( IBuffStatusProvider* Provider = Cast<IBuffStatusProvider>(Object))
 ## BP Callable UInterfaceのBPでの使用
 この`UInterface`でやりたいことです。
 
-BP上は`Target`に対して `IsPoision(Message)` ノード か `IsPoision`ノードを使います。
+BP上は`Target`に対して `IsPoison(Message)` ノード か `IsPoison`ノードを使います。
 
 ![](/images/ue5-interface-research/bp_interface_message_node.png)
 
 
-* お手紙アイコンがついていない方が`Inteface`への`Call Function`ノード
+* お手紙アイコンがついていない方が`Interface`への`Call Function`ノード
 * お手紙アイコンがついているノードが`Interface Message`ノード
 
 です。
 
 `Interface Message`は `Target`がこの`interface`を実装していれば関数を呼び出し正しい値を返します。実装していなければ内部実行せずに戻り値型のdefaultバリューを返し次の実行ピンへ進みます。詳しくは詳解をご参照ください。
 
-
-
-インターフェースを実装しているかは `Does Object Implement Interface`ノードでチェックできます。なぜか`Cast`ノードは使えません。なんで？`NotBlueprintable`つけたから？
+インターフェースを実装しているかは `Does Object Implement Interface`ノードでチェックできます。`Cast`ノードを使ってもいいです。
 
 ![](/images/ue5-interface-research/bp_does_object_implement_interface_node.png)
 
@@ -345,48 +343,18 @@ BP上は`Target`に対して `IsPoision(Message)` ノード か `IsPoision`ノ�
 
 ## BP Callable UInterfaceのC++での保持
 
-C++上は前回と全く同じです。`UPROPERTY() TScriptInterface<T>`でフィールドに持つだけです。
+`C++ Only UInterface`と同じです。
 
 ## BP Callable UInterfaceのBPでの保持
 
-BP上ではなぜかできませんでした。`BlueprintType`を付与していても、`NotBlueprintable`だとなぜかダメっぽいです。私の理解では「BP変数として保持できるか否かは`BlueprintType`のみで定まる」とおもっていたのですが、そうではないようです。仕様なのかバグなのか分かりませんでした。
-
-![](/images/ue5-interface-research/bp_interface_variables.png)
-*`BuffStatusProvider2`型はあるのに`BuffStatusProvider`型が表示されないでござる。なんでぇ？*
-
-ただし、上図の右側のようにGetter関数などのOutputピン経由ならば使えます。Delegateの引数経由でもいけるでしょう。
-
-```cpp
-// 実装側（C++）
-UCLASS(Blueprintable)
-class AStatusActor : public AActor, public IBuffStatusProvider, public IBuffStatusProvider2
-{
-	GENERATED_BODY()
-public:
-	UFUNCTION(BlueprintCallable)
-	virtual bool IsPoison() const override { return bPoison; } 
-
-	UFUNCTION(BlueprintCallable)
-	virtual bool IsPoison2() const override { return bPoison; }
-
-	// 自身をinterfaceとして公開する
-	UFUNCTION(BlueprintCallable)
-	TScriptInterface<IBuffStatusProvider> AsBuffStatusProvider()
-	{
-		return TScriptInterface<IBuffStatusProvider>(this);
-	}
-};
-```
-
-BP変数として持てないというのはEventGraphの可用性を損ないます。`Delegate`などの引数として与えられる状況でBP変数としてSet/Getする必要がないユースケースなら問題ないかと思いますが、そうでない場合グラフがくちゃくちゃになりやすいので苦しいと思います。
+普通にBP変数でInterface型を指定するだけです。
 
 ## BP Callable UInterfaceのC++での保持
 
 `C++ Only UInterface`と同じです。
 
 ## BP Callable UInterfaceのBPでの保持
-`NotBlueprintable`を付与して明示的にできないようにしているのでできません。
-想定通りです。一応確認しました。
+`CannotImplementInterfaceInBlueprint`を付与して明示的にできないようにしているのでできません。想定通りです。一応確認しました。
 
 比較のために実装可能な`IBuffStatusProvider2`を定義しました。
 ```cpp
@@ -400,13 +368,14 @@ public:
 
 ![](/images/ue5-interface-research/bp_interface_implement.png)
 
-`IBuffStatusProvider` はリストビューに表示されず、`IBuffStatusProvider2`が表示されていますね。`NotBlueprintable`が付与されているので`IBuffStatusProvider`実装できないのは正しい望んだ挙動です。一方、`IBuffStatusProvider2`は`NotBlueprintable`が付与されていないので実装できてしまいますね。
+`IBuffStatusProvider` はリストビューに表示されず、`IBuffStatusProvider2`が表示されていますね。`CannotImplementInterfaceInBlueprint`が付与されているので`IBuffStatusProvider`実装できないのは正しい望んだ挙動です。一方、`IBuffStatusProvider2`は`CannotImplementInterfaceInBlueprint`も`NotBlueprintable`も付与されていないので実装できてしまいますね。
 
 :::message
-**`interface`を実装** することと**関数を`override`** することは別概念です。
-純粋仮想関数があっても`BP`で`interface`を実装するだけならばBPコンパイルエラーになりません。純粋仮想関数をBP上で`override`したときはじめてBPコンパイルエラーになります。
+`interface`を実装することと関数を`override`することは別概念です。純粋仮想関数があっても`BP`で`interface`を実装するだけならばBPコンパイルエラーになりません。純粋仮想関数をBP上で`override`したときはじめてBPコンパイルエラーになります。
+:::
 
-`interface`を実装だけならできるという仕様は`Does Object Implement Interface`ノードの挙動に関わります。
+:::message
+`NotBlueprintable`により`interface`を実装だけならできるという仕様は`Does Object Implement Interface`ノードの挙動に関わります。
 :::
 
 ---
@@ -574,7 +543,7 @@ public:
     // virtual FText GetInteractionText() const;
     // virtual void OnInteract(AActor* Interactor);
 
-    // デフォルト実装する場合は_Implmentationを付ける
+    // デフォルト実装する場合は_Implementationを付ける
     // virtual bool CanInteract_Implementation(AActor* Interactor) const;
     // virtual FText GetInteractionText_Implementation() const;
     // virtual void OnInteract_Implementation(AActor* Interactor);
@@ -600,15 +569,15 @@ C++で使用/実装してBPでも使用/overrideするということから属�
 ## BP Native UInterfaceのC++での使用
 `BlueprintImplementableEvent`と同様に、`Execute_`付の`Thunk`関数を使用する必要があります。
 
-```cpp:使用例
+```cpp: 使用例
 void APlayerCharacter::TryInteract(AActor* Other)
 {
-    if(Other->Implments<UInteractable>())
+    if(Other->Implements<UInteractable>())
     {
         if(IInteractable::Execute_CanInteract(Other, this))
         {
             // ここにInteractor側のインタラクト処理を実装
-            Interactor_DoInterect();
+            Interactor_DoInteract();
 
             // Interacable側のインタラクトされた時の処理呼び出し
             IInteractable::Execute_OnInteract(Other, this);
@@ -674,7 +643,7 @@ class ATreasureBoxBase : public AActor, public IInteractable
  * BP側で鍵付き宝箱を実装する際はこのクラスから派生すること
  * デコレータパターン */
 UCLASS()
-class ALockedTreasureBox : public ATreasureBox
+class ALockedTreasureBox : public ATreasureBoxBase
 {
     virtual bool CanInteract_Implementation(AActor* Interactor) const override;
 };
@@ -707,7 +676,7 @@ bool ALockedTreasureBox::CanInteract_Implementation(AActor* Interactor) const
 
     // 事例２： 鍵付き宝箱
     // この宝箱の指定のカギを所有していたらOK！
-    if(IInvetoryOwner* Inventory = Interactor->Cast<IInvetoryOwner>())
+    if(IInventoryOwner* Inventory = Cast<IInventoryOwner>(Interactor))
     {
         return Inventory->HasItem(TEXT("Item.TreasureBoxKey.00"));
     }
@@ -721,7 +690,7 @@ bool ALockedTreasureBox::CanInteract_Implementation(AActor* Interactor) const
 上記のようにC++側で基盤実装されたうえで、さらにBP側でなんやかやoverride実装したいとします。
 
 
-`BP_TreasureBox_Animatable` は豪華アニメ付き宝箱とします。この宝箱に対して `CanIteract`を実装してみましょう。登場演出アニメーション中は開けられないこととします。
+`BP_TreasureBox_Animatable` は豪華アニメ付き宝箱とします。この宝箱に対して `CanInteract`を実装してみましょう。登場演出アニメーション中は開けられないこととします。
 宝箱ごときのアニメ状態は超単純であり、いちいちC++でもつとだるいのでBP変数で持つことにましょう。
 
 他にも開封アニメやＳＥを再生したいため、`OnInteract`も実装するのが良さげです。
@@ -823,7 +792,7 @@ Blueprint上で実装された関数を実行するためのラッパー関数�
 # `BlueprintNativeEvent` 詳解
 同様に `BlueprintNativeEvent`も見ていきましょう。
 説明用ミニマム版。
-```cpp:最小API
+```cpp: 最小API
 UINTERFACE(BlueprintType, Blueprintable)
 class UInteractable : public UInterface
 {
@@ -889,7 +858,7 @@ bool IInteractable::Execute_CanInteract(const UObject* O, AActor* Interactor)
 
 # Interface Message vs Call Function
 
-`BlueprintCallable`なくせにBlueprintから全然`TScriptInterface`経由で`call`できなかったので、カッとなって調査しました。結論から言えば、`Inteface Message` なる存在を知らなかったが故の勘違いでした。
+`BlueprintCallable`なくせにBlueprintから全然`TScriptInterface`経由で`call`できなかったので、カッとなって調査しました。結論から言えば、`Interface Message` なる存在を知らなかったが故の勘違いでした。
 
 まずは画像をご覧ください。
 ![](/images/ue5-interface-research/bp_call_function.png)
@@ -928,7 +897,7 @@ selfは `AStatusActor`です。
 画像を見ると同じ関数なのにTargetが異なるやつがありますね。一体これはなんでしょうか？
 
 * 上段ノードは `Class > IBuffStatusProvider > IsPoison(Message)`
-* 中段ノードは `Class > IBuffStatusProvider > IsPoision`
+* 中段ノードは `Class > IBuffStatusProvider > IsPoison`
 * 下段ノードは `Call Function > IsPosion`
 
 どれを使えばいいんでしょうか？何が異なるのでしょうか？調べました。
@@ -937,7 +906,7 @@ selfは `AStatusActor`です。
 `Call Function` とはTarget型`T`の`UFUNCTION`を呼び出すBPノードで、その実体は`UK2Node_CallFunction`ノードです。BPコンパイル時に ノードが指す`UFucntion`への関数呼び出しが内部的に登録されます。いわゆるメンバー関数呼び出しであり、最終的に`T::Func`が呼ばれます。
 
 よって中段と下段の違いは`UFunction`に何が入っているかの違いです。調べたところ、
-* 中段ノード: `IBuffStatusProvider::IsPoision`の`UFunction`
+* 中段ノード: `IBuffStatusProvider::IsPoison`の`UFunction`
 * 下段ノード: `AStatusActor::IsPoison`の`UFunction`
 
 が格納されていました。なるほど、つまり`override`したメンバー関数を普通に呼び出すのか`Super`型へキャストして親の関数を直接呼び出しちゃうのか、という違いですね。
@@ -948,7 +917,7 @@ selfは `AStatusActor`です。
 - `BlueprintCallable` な具象型のAPIは BPから`Call Function`(関数呼び出し)で呼び出す
 - `BlueprintCallable` な`interface API` はBPから `Interface Message`経由で呼び出す
 
-しかし待ってください、`IBuffStatusProvider::IsPoision()=0`は純粋関数です。少し怪しいですね、どこか勘違いしているようです。
+しかし待ってください、`IBuffStatusProvider::IsPoison()=0`は純粋関数です。少し怪しいですね、どこか勘違いしているようです。
 
 
 ## UFUNCTIONのおさらい
@@ -1000,7 +969,7 @@ Func->Func = Funcs[0].Pointer; //&IBuffStatusProvider::execIsPoison
 CallFunctionノードとは 関数名からUFunctionを探しそれを実行するノードでした。
 
 > よって中段と下段の違いは`UFunction`に何が入っているかの違いです。調べたところ、
-> * 中段ノード: `IBuffStatusProvider::IsPoision`の`UFunction`
+> * 中段ノード: `IBuffStatusProvider::IsPoison`の`UFunction`
 > * 下段ノード: `AStatusActor::IsPoison`の`UFunction`
 
 先ほどの説明をより正確に書き下しましょう。
@@ -1023,8 +992,8 @@ CallFunctionノードとは 関数名からUFunctionを探しそれを実行す�
 
 # まとめ
 
-* C++のみ → 純粋仮想関数でOK. `NotBlueprintable` 
-* BPからメッセージ呼び出し -> `BlueprintCallable`, `BlueprintType`, `NotBlueprintable`
+* C++のみ → 純粋仮想関数でOK. `CannotImplementInterfaceInBlueprint` 
+* BPからメッセージ呼び出し -> `BlueprintCallable`, `BlueprintType`, `CannotImplementInterfaceInBlueprint`
 * BPから関数を呼び出す -> `BlueprintCallable`, `BlueprintType`, `Blueprintable`
 * BPでoverride -> `BlueprintImplementableEvent`と `Execute_`呼び出し
 * BPで実装 -> `BlueprintNativeEvent`と `Execute_`呼び出し
@@ -1032,14 +1001,14 @@ CallFunctionノードとは 関数名からUFunctionを探しそれを実行す�
 
 共通ルール
 * `BlueprintImplemetableEvent` は `virtual`つけない
-* `BlueprintNativeEvent` は `_Implmentation`を`virtual`で実装する
+* `BlueprintNativeEvent` は `_Implementation`を`virtual`で実装する
 * `BlueprintImplemetableEvent` と `BlueprintNativeEvent`は `Execute_`を使って呼びだす
 
 見えないThunk関数に気を付ける。間違った使い方をすると`check`で止まる。`DO_CHECK`マクロを外していると止まらず気が付けない。
 
 `UInterface` とは`interface`のように振る舞う型であり`interface`そのものではない。C++の仮想関数を適切に呼び出せるように拡張しつつ、`UHT`と`UObject`の仕組みを利用してリフレクション・GC・BP連携などをサポートしたインターフェース機構である。
 
-# 付録： UInteface 設計方針
+# 付録： UInterface 設計方針
 個人的に`interface`はデフォルト実装やデータを持つべきではないと考えております。データを持つならBaseクラスでいいじゃん、と思っているからです。ただし、そうせざるを得ないときもあります。`interface`とはこうあるべき論は本稿の主旨ではないので言及しません。
 
 ```cpp
@@ -1067,7 +1036,7 @@ public:
 ```
 
 :::message
-`interface`はデータフィールドを持たないほうがいいでしょう。なぜならば実装側のメモリレイアウトが変更されてしまうからです。特にUEではとあるフィールドを派生型で`UPROEPRTY`にするしないを変更することができません。また`UPROPETY`の属性やメタ情報も変更することができません。HPという値を`UPROPERTY(Replicated)`にするべきか、`UPROPERTY(ReplicatedUsing=OnRep_Hp)`なのかは実装者側にしかわからないでしょう。
+`interface`はデータフィールドを持たないほうがいいでしょう。なぜならば実装側のメモリレイアウトが変更されてしまうからです。特にUEではとあるフィールドを派生型で`UPROPERTY`にするしないを変更することができません。また`UPROPERTY`の属性やメタ情報も変更することができません。HPという値を`UPROPERTY(Replicated)`にするべきか、`UPROPERTY(ReplicatedUsing=OnRep_Hp)`なのかは実装者側にしかわからないでしょう。
 ひとたびデータを持つと、エディタでのオーサリングや`SaveGame`などinterfaceが負うべき責任がどんどん増えてしまいます。
 :::
 
@@ -1078,7 +1047,7 @@ public:
 `interface`がクラス間を疎結合にしているというのはある種正しいのですが、より正確な実態は`interface`に依存を集約しているだけです。`interface`による「依存性の逆転」ではなく`interface`への「依存性の抽出」という表現がより正確なところではないでしょうか？
 広く依存される`interface`は依存性が抽出されまくった濃厚でドッピオなコーヒーのようなものなので、ひとたび名前やAPIを変更しようとすると大変な苦労に見舞われます。事実上不可能なため`IInteractable2`や `IMyObjectEx`みたいな次期`interface`が生えたりします。
 
-`inteface`に高度に抽象化されているが故に、この文脈でこのポインタにはどの具象クラスが入っているからわからん、デバッグが大変だーということもあります。コードを読む側も実装がどこにあるか探すのが大変なことがあります。
+`interface`に高度に抽象化されているが故に、この文脈でこのポインタにはどの具象クラスが入っているからわからん、デバッグが大変だーということもあります。コードを読む側も実装がどこにあるか探すのが大変なことがあります。
 
 シグネチャを統一したいだけならば`concept`や`template`関数を使えば代替できたりします。`interface`はツール群の一つとして捉えてください。`UInterface`を使うときは具体的に解決したい課題を見据えて導入するのが良さそうだと思いました。
 
@@ -1089,3 +1058,5 @@ public:
 * [UE4 の C++ プログラミング入門](https://dev.epicgames.com/documentation/ja-jp/unreal-engine/introduction-to-cplusplus-programming-in-ue4?application_version=4.27)
 * [[UE4/UE5] Interfaces (BP + C++)](https://kitatusandfriends.co.uk/ue4/ue5/interfaces/)
 * [“Interface Call” (vs Interface Message/Call Function)](https://forums.unrealengine.com/t/interface-call-vs-interface-message-call-function/344723)
+* [UE4 インターフェイスについてのメモ](https://qiita.com/unknown_ds/items/bbe94534048ac50fb4b9)
+* [UAbilitySystemInterface marked with CannotImplementInterfaceInBlueprint](https://forums.unrealengine.com/t/uabilitysysteminterface-marked-with-cannotimplementinterfaceinblueprint/2522628/1)
