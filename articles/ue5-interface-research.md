@@ -1011,30 +1011,6 @@ CallFunctionノードとは 関数名からUFunctionを探しそれを実行す�
 # 付録： UInterface 設計方針
 個人的に`interface`はデフォルト実装やデータを持つべきではないと考えております。データを持つならBaseクラスでいいじゃん、と思っているからです。ただし、そうせざるを得ないときもあります。`interface`とはこうあるべき論は本稿の主旨ではないので言及しません。
 
-```cpp
-// 被ダメージ可能なキャラクタへの統一的なinterface
-// これもまたinterfaceと認めよう
-class ICharacterDamageable
-{
-public:
-    // 被ダメージ適用処理
-    // 与ダメ数値を与えて、実際に減らしたHPを返す
-    // 返り値は「減じたHPに応じた効果」が発動する系のゲームルールに使用してよい
-    virtual int ApplyDamage(int Damage)
-    {
-        int BeforeHp = Hp;
-        Hp = FMath::Max(Hp - Damage, 0); 
-        return BeforeHp - Hp;
-    };
-
-    // 0を返すデフォルト実装
-    virtual int GetCurrentHp() const{ return 0; }
-
-    // やられアニメーションやVFXなど...
-    virtual void DoDamageReaction() = 0;
-};
-```
-
 :::message
 `interface`はデータフィールドを持たないほうがいいでしょう。なぜならば実装側のメモリレイアウトが変更されてしまうからです。特にUEではとあるフィールドを派生型で`UPROPERTY`にするしないを変更することができません。また`UPROPERTY`の属性やメタ情報も変更することができません。HPという値を`UPROPERTY(Replicated)`にするべきか、`UPROPERTY(ReplicatedUsing=OnRep_Hp)`なのかは実装者側にしかわからないでしょう。
 ひとたびデータを持つと、エディタでのオーサリングや`SaveGame`などinterfaceが負うべき責任がどんどん増えてしまいます。
