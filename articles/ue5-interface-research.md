@@ -382,7 +382,7 @@ public:
 
 # 3: BP Implementable UInterface
 C++側で呼び出しを担いBPがinterfaceを実装するパターンです。
-便器上、C++で使用してBPで実装するUInterfaceのことを`BP Implementable UInterface`と呼称します。
+便宜上、C++で使用してBPで実装するUInterfaceのことを`BP Implementable UInterface`と呼称します。
 
 サンプル事例としてダメージリアクションをBP上で実装します。ダメージリアクション呼び出し自体はC++上で実装される複雑なダメージ制御内で行われるものとします。BP側ではやられモーションやIK調整などC++から与えられた文脈に応じて制御するものとします。
 
