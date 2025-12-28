@@ -15,10 +15,10 @@ Unreal Engine 5 の 非同期APIについての研究報告です。
 ことのおこりは `DataRegistry` で非同期ロードしたあとに `TableRow`から得た `TSoftObjectPtr` を更に非同期ロードするという二段階非同期ロードを試みたことです。
 
 * 非同期ロードして非同期処理したい
-* async-awaitな感じで流れるように書きたい
+* `async-await`な感じで流れるように書きたい
 * コールバックのネスト地獄を回避したい
 
-特にスレッドをゲームからワーカーへ、ワーカーからゲームへと柔軟に切り替える感じの非同期処理を実装したい。という気持ちからモダンなUnreal C++の書き方を調べたのですがインターネッツ上にはなかなか情報が見つかりません。AIに聞いてもハルシネーションを見抜ける知識がないのでよくわかりません。模索しました。
+特にスレッドをゲームからワーカーへワーカーからゲームへと柔軟に切り替える感じの非同期処理を実装したい、という気持ちからモダンなUnreal C++の書き方を調べたのですがインターネッツ上にはなかなか情報が見つかりません。AIに聞いてもハルシネーションを見抜ける知識がないのでよくわかりませんでした。模索しました。
 
 
 # 検証環境
@@ -29,25 +29,28 @@ Unreal Engine 5 の 非同期APIについての研究報告です。
 UE5.5.4でも確認済みです。
 
 # 非同期機構一覧
-Unreal Engine 5.5.4時点では以下の非同期機構が存在します。
+Unreal Engine 5.5.4時点では以下の非同期に扱えそうなAPIが存在します。
 
 * TaskGraph
 * Task System
 * TFuture-TPromise
+* Async
+* FQueuedThreadPool
+* FRunnable
 
 なにが違ってどれを使えばいいんでしょうか。
 
 # 結論: Task Systemの勝ち
-結論から言えば `UE::Tasks` 名前空間内の `Task System`を使うのが一番汎用性が高く現実的でした。
+`UE::Tasks` 名前空間内の `Task System`を使うのが一番汎用性が高く現実的でした。
 
 # 研究概要
 非同期のユースケースとしては、
 * セーブシステム:
-  * セーブデータを収集・圧縮・ファイルI/O・展開・反映処理を非同期かつフレーム分散
+  * セーブデータの収集・圧縮・ファイルI/O・展開・反映処理を非同期かつフレーム分散する
 * 通信周り:
-  * 認証・Lobby取得・Join/Leaveといった非同期通信の連鎖
-* 遅延ロード:
-  * ActorやAssetを遅延ロードして非同期で待ち受けてから後続処理を実行
+  * 認証・Lobby取得・Join/Leave・RPCや同報といった順序を持った非同期通信の連鎖
+* 遅延ロードと遅延初期化:
+  * ActorやAssetを遅延ロードして非同期で待ち受けてから初期化等の後続処理を実行する
 
 が思いつきますね。これらのユースケースに幅広く対応できて、使いやすく、書き味がよく、デッドロックしにくい、非同期機構の勝利です。
 
@@ -61,7 +64,8 @@ Unreal Engine 5.5.4時点では以下の非同期機構が存在します。
 まずは古くから存在し広く使われているコールバック方式をおさらいします。
 
 `TSoftObjectPtr`からの非同期ロードは`FStreamableManager` 経由で実行します。ロード完了後の`continuation`はコールバックを渡します。
-```cpp
+
+```cpp: callback
 TSoftObjectPtr<UFooAsset> SoftPtr;
 FSoftObjectPath Path = SoftPtr.ToSoftObjectPath();
 FStreamableManager& StreamableManager = UAssetManager::GetStreamableManager();
@@ -74,8 +78,27 @@ StreamableManager.RequestAsyncLoad(Path, [SoftPtr]()
     }
 });
 ```
-ロード後に追加の処理を実装したいときはこのコールバックからDelegateを呼ぶかさらにコールバックすることでチェインを張ります。
-コールバックチェインです。チェインが簡単に張れるようにラップしてみましょう。
+ロード後に追加の処理を実装したいときはこのコールバックからDelegateを呼ぶかさらに非同期APIにコールバックを渡すことでチェインを張ります。コールバックチェインです。
+
+```cpp: コールバックチェイン
+StreamableManager.RequestAsyncLoad(Path, [SoftPtr]()
+{
+    UFooAsset* LoadedAsset = SoftPtr.Get();
+    DoAsync1(LoadedAsset, []()
+    {
+        DoAsync2([]()
+        {
+            DoAsync3([]()
+            {
+                //...以下無限にコールバックをネストしていく
+            })
+        });
+    });
+});
+
+```
+
+これは正直つらいので、チェインが簡単に張れるようにラップしてみましょう。
 
 ```cpp: コールバックスタイル
 template<TAsset>
@@ -105,7 +128,7 @@ static void LoadAssetAsync<TAsset>(TSoftObjecPtr<TAsset> Ptr, TFunction<TAsset*>
     });
 }
 ```
-何か便利になったかというと、何も便利になっていません。即時パスが付いたぐらいです。これはダメですね。
+多少便利になるようにラップできたぞ！よし使ってみよう！
 
 ```cpp: コールバック地獄
 void BeginPlay()
@@ -124,15 +147,17 @@ void BeginPlay()
 }
 ```
 
+何か便利になったかというと、何も便利になっていません。即時パスやエラーハンドリングが付いたぐらいです。これはダメですね。
+
 ラムダ式を MoveTempしたりと面倒くさいですし、結局コールバックを使った時点でコールバックを次々とネストさせるしかありません。なんとかしたいです。
 
 # 2. `TFurure-TPromise` パターン
 
-Unreal Engine には `TFuture-TPromise`が実装されています。こちらは`std::future/std::promise`に相当する機能です。ということは 典型的な future-promiseパターンでcontinuation処理を実装できそうですね。
-`TFuture`は continuation処理に対応しており`Then()`と`Next()`が実装されています。先ほどの非同期ロードメソッドが `TFuture`を返すようにしてみます。
+Unreal Engine には `TFuture-TPromise`が実装されています。こちらは`std::future/std::promise`に相当する機能です。ということは 典型的な `future-promise`パターンでcontinuation処理を実装できそうです。
+`future`と異なり`TFuture`は continuation処理に対応しており`Then()`と`Next()`が実装されています。先ほどの非同期ロードメソッドが `TFuture`を返すようにしてみます。
 
 :::message
-`Then`は滅多に使いませんので覚えなくていいです。`Next`だけ使ってください。
+`Then`は後続処理の本体でありますが、値変換するシンタックスシュガー的な関数である`Next`の方が便利です。`Next`を推奨します。
 :::
 
 ```cpp: future版
@@ -176,18 +201,22 @@ static TFuture<TAsset*> LoadAssetAsyncFuture<TAsset>(TSoftObjecPtr<TAsset> Ptr)
 
 ## 解説
 こちらの実装はUnreal C++に対する非常に多くの学びがありました。
-`FStreamableManager::RequestAsyncLoad`は `FStreamableDelegate`を要求します。これはUEの標準のDelegateなのですが、コピー可能である必要があります。ムーブキャプチャを伴うラムダ式はコピー不可になるため`FStreamableDelegate`にできません。そのため、`TPromise`をムーブキャプチャじゃなくてコピーキャプチャしたいのですが、`TPromise`は`UnCopyable`です。
-`TPromise`は`RequestAsyncLoad`に対してコピー渡しもムーブ渡しもできなくて詰んでいるということです。
-
-:::message
-約束はコピーできない
-:::
+`FStreamableManager::RequestAsyncLoad`は `FStreamableDelegate`を要求します。これはUEの標準のDelegateなのですが、コピー可能である必要があります。ムーブキャプチャを伴うラムダ式はコピー不可になるため`FStreamableDelegate`にできません。そのため、`TPromise`をムーブキャプチャじゃなくてコピーキャプチャしたいのですが、`TPromise`は`UnCopyable`を継承しておりコピー不可です。
+つまり、`TPromise`は`RequestAsyncLoad`に対してコピー渡しもムーブ渡しもできなくて詰んでいることがわかりました。
 
 そこで`TPromise`を`TSharedRef`に包むことでコピーキャプチャできるようにします。
 ```cpp
     TSharedRef<TPromise<TAsset*>> Promise = MakeShared<TPromise<TAsset*>>();
 ```
 `FDelegate`などにpromiseを渡すときは`TSharedRef`に包むということですね。
+
+:::message
+約束はコピーできない
+:::
+
+:::message
+`TUniqueFunction`のような型をコールバック型として受け取るAPIなら`MoveTemp`で転送可能です
+:::
 
 ## 使い方
 ラップした関数の使い方は次の通りです。
@@ -244,19 +273,17 @@ void AMyActor::BeginPlay()
     });
 }
 ```
-このようにネストなしにNextを連続して付与することができます。
-ラムダ式の返り値型は推論してくれるのですが、皆様の読みやすさのために明示的に指定しております。
-前のNextに与えるラムダ式の返り値型が次のNextに与えるラムダ式の引数になります。
+このようにネストなしにNextを連続して付与することができます。ラムダ式の返り値型は推論してくれるのですが、皆様の読みやすさのために明示的に指定しております。前のNextに与えるラムダ式の返り値型が次のNextに与えるラムダ式の引数になります。
 
-Future-Promiseパターンの強みであるflatなコールバックが実装できています。
-なんだかjavascriptっぽくなってきましたね。
+`Future-Promise`パターンの強みであるflatなコールバックが実装できています。
+なんだかjavascriptっぽくなってきましたね。これは期待できます。
 
 ## 結局使えない future-promiseパターン
 
 が、しかし何も便利になっていません。
 上記サンプルでは単純に同期処理しかしていません。だったら一つの関数にに書き下せばいい話ですし、そちらの方が保守性も高いでしょう。
 
-futureでチェインしたいのはさらなる非同期処理です。
+`future`でチェインしたいのはさらなる非同期処理です。
 `DataAsset` の中のソフト参照を更にロードしてみます。
 
 ```cpp: load chain
@@ -288,13 +315,18 @@ void AActor::BeginPlay()
     });
 }
 ```
-`Next`がネストしている！残念！Aをロードしてそのロード結果からBをロードするような非同期に非同期を連ねた処理がフラットに書けませんでした。
+`Next`がネストしている！ぐわぁー！
 
+Aをロードしてそのロード結果からBをロードするような非同期に非同期を連ねた処理がフラットに書けませんでした。
+
+javascriptの`unwrap`のような便利関数はありません。
 無理矢理`Next`をフラットに書くことも可能です。ただしその場合は `TFuture<TFuture<TResult>>` 型となるので `Next`に入るのは `TFuture<TResult>`です。`TFuture<TResult>`からは`GetResult()`で結果を待ち受けて取得できます。
+
 
 ```cpp: デッドロック
 void AActor::BeginPlay()
 {
+    // 例としてBeginPlay(ゲームスレッド)を開始地点とする
     LoadAssetAsyncFuture(MyDataAssetPtr)
     .Next([](UMyDataAsset* Asset) -> UFooDataAsset*
     {
@@ -311,7 +343,7 @@ void AActor::BeginPlay()
 残念ながらデッドロックします。
 原因は `BeginPlay`ゲームスレッドで開始したロード処理をゲームスレッドで`GetResult`しているからです。`FStreamableManager::RequestAsyncLoad`はゲームスレッドでコールバックを返します。
 その結果 `Promise::SetValue`もゲームスレッドで実行され、上記`Next`に与えたコールバックもゲームスレッドで呼ばれます。
-一方で、`Future::GetResult`は呼び出しスレッドをブロックして`promise`を待ち受けるメソッドです。`GetResult`をゲームスレッドで呼ぶということはゲームスレッドをブロックするということです。結果、`FStreamableManager`が動くことがないので、永遠に待ち続けます。
+一方で、`Future::GetResult`は呼び出しスレッドをブロックして`promise`を待ち受けるメソッドです。`GetResult`をゲームスレッドで呼ぶということはゲームスレッドをブロックするということです。結果、`FStreamableManager`の完了コールバックが動かないので、永遠に待ち続けます。
 
 この問題が難しいのは `SoftObjectPtr`がロード済みであったパターンです。
 `LoadAssetAsyncFuture`はロード済みの場合は即時`return` するのでロードしません。
@@ -321,7 +353,12 @@ void AActor::BeginPlay()
 
 Workerスレッドに投げるなどの回避策を取ることは可能ですが、そのあとゲームスレッドに戻す必要があることがほとんどでしょう。
 それをやるぐらいなら`Next`をネストさせた方がマシです。
-```cpp
+```cpp: スレッドを行き来する
+    LoadAssetAsyncFuture(MyDataAssetPtr)
+    .Next([](UMyDataAsset* Asset) -> UFooDataAsset*
+    {
+        return IsValid(Asset) ? Asset->ChildAsset : nullptr;
+    })
     .Next([](TFuture<UFooDataAsset* Child> FutureResult)
     {
         AsyncTask(WorkerThread, []()
@@ -344,15 +381,13 @@ Workerスレッドに投げるなどの回避策を取ることは可能です�
 ```
 
 何をしても結局ネストしまくりなので、あまり利点を感じません。
-根本的な原因は`FStreamableManager`のコールバックがゲームスレッド指向であることにあります。それ自体は`UObject`を触るので当然の仕様なのですが、`Future-Promise` にはスレッド切り替えの機能がないが故に使い勝手が悪いのです。
+根本的な原因は`FStreamableManager`のコールバックがゲームスレッド指定であることにあります。それ自体は`UObject`を触るので当然の仕様なのですが、`Future-Promise` にはスレッド切り替えの機能がないが故に使い勝手が悪いのです。
 
 そこで一部処理をワーカースレッドに投げてみましょう。
 
 # `Future-Async`
 
-こちらはpure C++の `std::async`に該当する機能です。`Future-Promise`にスレッド選択機能が拡張された `Async`を利用すると多少マシになります。`Async`は渡した関数を指定のスレッドで実行してくれる機能です。結果は `TFuture`経由で待ち受けることができます。
-
-`EAsyncExection::TaskGraph`を指定すると内部で`TaskGraph`を利用しますし、`Thread`を指定するとワーカースレッドで動かしてくれます。しかしながら、結局`TFuture`が返ってくるので`Next`でチェインさせることは難しいです。
+こちらはpure C++の `std::async`に該当する機能です。`Async`は`Future-Promise`にスレッド選択機能が拡張されたもので、渡した関数を指定のスレッドで実行してくれる機能です。`caller`はその結果を `TFuture`経由で待ち受けることができます。
 
 ```cpp: async
 void WaitInThread()
@@ -384,9 +419,17 @@ void WaitInThread()
 }
 ```
 
-今回はアセットロードであったため、`Async`の威力が発揮できませんでした。
-`Future-Promise`と違って `Future-Async`はラムダ式の実行スレッドを選択できるのですから、ワーカーに任せたい処理を書くべきです。題材が悪かったので別の例で考えてみましょう。
+:::message
+`while(true)`や `WaitFor`で待つのは極悪です。説明のための疑似コードなのでコピペしないように
+:::
 
+第1引数に`EAsyncExection::TaskGraph`を指定すると内部で`TaskGraph`を利用します。`Thread`を指定するとワーカースレッドで動かしてくれます。
+
+`TPromise`を直接使うよりもはるかに簡単にスレッド処理を実装できました。しかしながら、結局`TFuture`が返ってくるので`Next`でチェインさせることは難しいです。
+今回はアセットロードであったため、`Async`の威力が発揮できませんでした。
+`Future-Promise`と違って `Future-Async`はラムダ式の実行スレッドを選択できるのですから、ゲームスレッド以外に任せたい処理を書くべきです。題材が悪かったので別の例で考えてみましょう。
+
+疑似コードです。
 ```cpp: スクショとるasync
 void TakeScreenShotAsync()
 {
@@ -418,7 +461,7 @@ void TakeScreenShotAsync()
     });
 }
 ```
-まぁまぁやりたいことは書き下せました。ただし、`Future`を返すので結局ネストします。スレッドが選べるようになったけど、ネスト地獄が始まります。
+やっぱりネストします。`Future`を返すので結局ネストします。まぁまぁやりたいことは書き下せましたし、スレッドが選べるようになったけど、ネスト地獄が始まります。
 
 もうちょっとマシになりませんか？
 
@@ -428,21 +471,21 @@ void TakeScreenShotAsync()
 上記例を Task Systemバージョンに書き直します。
 
 ```cpp: Tasys スタイル
-#include "Task/Tasks.h"
+#include "Tasks/Task.h"
 
 template<typename TAsset>
-static TTask<TAsset*> LoadAssetAsyncTask<TAsset>(TSoftObjecPtr<TAsset> Ptr)
+static UE::Tasks::TTask<TAsset*> LoadAssetAsyncTask<TAsset>(TSoftObjecPtr<TAsset> Ptr)
 {
     // 即時リターン:無効な参照
     if(SoftPtr.IsNull())
     {
-        return UE::Tasks::MakeCompletedTask<AssetType*>(nullptr);
+        return UE::Tasks::MakeCompletedTask<TAsset*>(nullptr);
     }
 
     // 即時リターン:ロード済みパターン
     if(SoftPtr.IsValid())
     {
-        return UE::Tasks::MakeCompletedTask<AssetType*>(SoftPtr.Get());
+        return UE::Tasks::MakeCompletedTask<TAsset*>(SoftPtr.Get());
     }
 
     // FTaskEventの寿命を延ばすために共有状態を作る
@@ -456,10 +499,10 @@ static TTask<TAsset*> LoadAssetAsyncTask<TAsset>(TSoftObjecPtr<TAsset> Ptr)
             Event.Trigger();
         }
 
-        AssetType* GetResult() const { return Result.Get(); }
+        TAsset* GetResult() const { return Result.Get(); }
 
         UE::Tasks::FTaskEvent Event;
-        TWeakObjectPtr<AssetType> Result { nullptr };
+        TWeakObjectPtr<TAsset> Result { nullptr };
     };
     const TSharedRef<FState> State = MakeShared<FState>(UE_SOURCE_LOCATION);
 
@@ -472,7 +515,7 @@ static TTask<TAsset*> LoadAssetAsyncTask<TAsset>(TSoftObjecPtr<TAsset> Ptr)
     });
 
     // Eventのトリガーを待つタスクを返す
-    UE::Tasks::TTask<AssetType*> Task = UE::Tasks::Launch(UE_SOURCE_LOCATION,
+    UE::Tasks::TTask<TAsset*> Task = UE::Tasks::Launch(UE_SOURCE_LOCATION,
         [State](){ return State->GetResult(); },
         UE::Tasks::Prerequisites(State->Event));
 
@@ -646,56 +689,34 @@ Prerequisities(LoadTask));
 
 C# の Taskと async-awaitほど流麗には実装できませんが、最低限スレッド指定機能や非同期待ち受け機能が備わっているため十分実戦でつかえます。
 
-## Task応用編
+:::message
+循環参照するとデッドロックします
+:::
+
 ### FTaskEvent
-FTaskEvent は さながらC#やjavascriptの`TaskCompletionSource` として利用できます。
+`FTaskEvent` は さながらC#やjavascriptの`TaskCompletionSource` として利用できます。
 Task化されていないありとあらゆる処理を Task化することができます。
 
-上述の `LoadAssetAsyncTask`がまさにそれで、FTaskEventを利用して コールバックをTaskへと繋ぎこんでいます。
+上述の `LoadAssetAsyncTask`がまさにそれで、`FTaskEvent`を利用して コールバックをTaskへと繋ぎこんでいます。
 これと同じ仕組みで通信機能やGameplayAbilityやなんでもかんでも Task化することができます。
 
-### 非同期処理の同期を非同期でとる
-複数のActorをスポンさせて全員そろったら何かしてみましょう。
-ただし、同一フレームで一度にスポンさせてはいけません。
+# まとめ
+連鎖した非同期処理を実装するためのモダンな実装を模索しました。
+結果として、`UE::Tasks`を使うのが最強という結論に落ち着きました。名前付きスレッドを指定できるのが大変便利です。
 
-```cpp
-static TTask<AActor*> SpawnActorAsync(TSubclassOf<AActor>)
-{
-    TTask<AActor*> Task = UE::Tasks::Launch(UE_SOURCE_LOCATION,
-    [State]()
-    {
-         return State->GetResult();
-    },
-    UE::Tasks::Prerequisites(State->Event));
+`TaskSystem`は後発なだけあって、ほかの機構よりも改善が加えられているという所感です。
+内部的にTaskGraphを使うなど、便利に使いやすくなるように整えられた非同期機構という印象です。
 
-    return Task;
-}
+非同期周りの記事が2022年で終わっているので調査に苦労しました。
+各種APIのオーバーヘッドの違いなども気になるところではありますが、当初の目的である非同期ロードチェインは達成できたのでゴールしちゃいます。
 
-static FTask SpawnActorsAsync(TArray<TSubclassOf<AActor>> Actors)
-{
-    TArray<TTask<AActor*>> Tasks;
-    for(auto& Actor: Actors)
-    {
-        FTask Task = SpawnActorAsync(Actor);
-        Tasks.Emplace(Task);
-    }
-    TTask<AActor*> FinalTask = UE::Tasks::Launch(UE_SOURCE_LOCATION,
-    []()
-    {
-        AddNested(Tasks);
-    });
-    return FinalTask;
-}
-
-void AManager::BeginPlay()
-{
-    FTask Task = SpawnActorsAsync({});
-    Launch([Task]()
-    {
-        // 全員スポンしてReadyになったらなんかする
-    });
-}
-```
+:::message
+非同期周りはAI Agentに任せるとたまにデッドロックするのできちんとレビューしましょう
+:::
 
 # 参考資料
 https://dev.epicgames.com/documentation/ja-jp/unreal-engine/tasks-systems-in-unreal-engine
+https://dev.epicgames.com/documentation/ja-jp/unreal-engine/task-graph-insights-in-unreal-engine-5
+https://www.docswell.com/s/EpicGamesJapan/5QMWWK-UE4_CEDECKYUSHU2021_MultiThread
+https://qiita.com/EGJ-Takashi_Suzuki/items/83ac194e8a914a56b9d1
+https://unrealengine.hatenablog.com/entry/2022/07/31/224504
