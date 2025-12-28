@@ -1,9 +1,9 @@
 ---
 title: "UE5:Unreal Engineの非同期APIについての研究"
-emoji: "🌟"
+emoji: "💫"
 type: "tech" # tech: 技術記事 / idea: アイデア
 topics: [ue5,cpp,unrealengine,unrealengine5]
-published: false
+published: true
 ---
 # はじめに
 Unreal Engine 5 の 非同期APIについての研究報告です。
