@@ -8,11 +8,10 @@ published: false
 
 # はじめに
 Unreal Engine 5.2 より `UE_LOGFMT` が登場しました。
-こちらのログ機構は構造化ログを出すのに便利です。
 `%d`, `%s`のようなフォーマット指定子を使うことなく位置指定子 `{}`でType付けされたフォーマットを実行することができます。
-つよつよなログ機構なので基本的に乗り換えた方がよいでしょう。
+つよつよなログ機構なので`UE_LOG`の上位互換となることができます。乗り換えた方がよいのではないでしょうか。
 
-本稿では基本的な使い方のほかにカスタム型のLOGFMT対応について調べました。
+本稿では`UE_LOGFMT`の基本的な使い方のほかにカスタム型のLOGFMT対応について調べました。
 かなり以前からある機能であるにもかかわらず、だれも具体的なカスタムclassへのLOGFMT対応について触れてくれません。
 そのせいで 2026/01月現在であってもAIはちゃらんぽらんな回答を返します。
 
@@ -46,7 +45,7 @@ void AActor::BeginPlay()
 ```
 をインクルードします。
 
-Coreモジュールにいるので`Build.cs`へ追加の依存を足す必要はありません。
+`Core`モジュールにいるので`Build.cs`へ追加の依存を足す必要はありません。
 
 ## 位置パラメータを使った使い方
 
@@ -54,10 +53,10 @@ Coreモジュールにいるので`Build.cs`へ追加の依存を足す必要は
 この位置指定子に与える名前をログフィールド名と言います。
 例えば `{0}` としたときのそのフィールド名は`0`です
 
-フィールド名にはnon-unique empty 名であることが要求されます。
+フィールド名は`unique non-empty` 名であることが要求されます。
 
 
-```cpp: 数値指定
+```cpp: 位置指定
 FName Name = TEXT("Foo");
 int Value = 42;
 UE_LOGFMT(LogTemp, Log, "Name={0}, Value={1}", Name, Value);
@@ -68,7 +67,7 @@ UE_LOGFMT(LogTemp, Log, "Name={0}, Value={1}", Name, Value);
 フィールドの登場順と引数の順番が対応しています。名前は一切関係がないことに注意が必要です。
 
 `{0}`と`{1}`はさもパラメータパックのindexかのような見た目ですが、ただの名前でありindexではありません。
-`{1}`と`{0}`の順番を入れ替えても効果は変わらず、与えた引数の順です。
+`{1}`と`{0}`の順番を入れ替えても効果は変わらず、与えた引数の順です。注意してください。
 
 入れ替えた事例です。
 ```cpp: 数値指定
@@ -81,19 +80,23 @@ UE_LOGFMT(LogTemp, Log, "Value={1}, Name={0}", Name, Value);
 ログの出力結果は変わりません。
 ただの名前ですので、位置パラメータでは任意の文字列でも使用可能です。
 
-また、ログフィールド名と実引数名はいっさい関係がありません。
-```cpp
-UE_LOGFMT(LogTemp, Log, "Name={N}, Value={V}", Value, Name);
+ログフィールド名と実引数名はいっさい関係がありません。順番のみが考慮されます。
+
+```cpp: 引数の順番間違えた例
+// Name, Valueと与えるべきところをValue,Nameと与えている！
+UE_LOGFMT(LogTemp, Log, "Name={Name}, Value={Value}", Value, Name);
 // "Name=42, Value=Foo" とログ出力される
 ```
 
-このときログの意味は壊れていますが、`%s`のようなフォーマット指定子を使わないため、安全にシリアライズされます。クラッシュしません。
+このときログの意味は壊れていますが、`%s`のようなフォーマット指定子を使わないため、安全にシリアライズされます。クラッシュしません。最悪、ログが出ないかログがヘンテコになるだけでクラッシュしないのは助かります。
 
 もしログフィールド名と実引数を対応付けしたい場合は、後述の名前付きパラメータを利用します。
 
 ## 名前付きパラメータを使った使い方
 
-名前付きパラメータでは、引数として名前と値のタプルを与えます。
+名前付きパラメータでは、引数に名前と値のタプルを与えます。
+タプルの0番目にはフォーマット文字列で指定したフィード名を、タプルの1番目にはログ出力したい値を与えます。
+
 ```cpp
 UE_LOGFMT(LogTemp, Log, "Name={Name}, Value={Value}",
             ("Name", Name),
@@ -101,7 +104,7 @@ UE_LOGFMT(LogTemp, Log, "Name={Name}, Value={Value}",
 // "Name=Foo, Value=42" とログ出力される
 ```
 
-名前指定できているのでパラメータの順番は入れ替えても正しく表示されます。
+名前指定なのでログフィールドや引数の順番を入れ替えても正しく表示されます。
 ```cpp
 UE_LOGFMT(LogTemp, Log, "Name={Name}, Value={Value}",
              ("Value", Value),
@@ -109,11 +112,13 @@ UE_LOGFMT(LogTemp, Log, "Name={Name}, Value={Value}",
 // "Name=Foo, Value=42" とログ出力される
 ```
 
-AI Agentに実装させるときはこちらの方が多少安全かと思います。
+可読性の観点や指定順のミスを防ぎやすい点に優れています。
+手で書くと面倒くさいのが玉に瑕ですが、AI Agentに実装させるときはこちらの方が安全かと思います。面倒くささもないですしね。
 
 ### 同名禁止
 
-パラメータ名はユニークである必要があります。内部的にTMapに格納されるためそれはそう。
+パラメータ名はユニークである必要があります。内部的にTMapに格納されるためです。
+
 ```cpp
 const FName ClientName = TEXT("Client");
 const FName ServerName = TEXT("Server");
@@ -135,7 +140,7 @@ UE_LOG(LogTemp, Log, TEXT("日本語でおｋ"));
 UE_LOGFMT(LogTemp, Log, "日本語でおｋ");
 ```
 
-printfスタイルに近づいてより読みやすく書きやすくなったのではないでしょうか？
+printfスタイルに近づいてより読みやすく書きやすくなったのではないでしょうか。
 
 ## 組み込み型対応済み
 
@@ -153,13 +158,17 @@ UE_LOGFMTは UE組み込み型にかなり対応してくれています。
 * FName
 * FGuid
 
+ポインタ系:
+* `TObjectPtr<T>`
+* `TSoftObjectPtr<T>`
+
+コンテナ:
 * `TArray<T>`
 * `TMap<T>`
 
-* `TObjectPtr<T>`
 
-```cpp
-
+```message
+`FVector`, `FTransform`などの数学系構造体が非対応です
 ```
 
 ## FString の デリファレンス不要
@@ -176,15 +185,15 @@ const int errorCode = -1;
 UE_LOG(LogTemp, Log, TEXT("%s"), *FString::Format(TEXT("エラーが発生しました:%d"), errorCode));
 ```
 
-TEXTがいるせいで、閉じ括弧`)`の数とかよくわからんですね。
+TEXTがいるせいで、閉じ括弧`)`の数がよくわからんです。
 
 
-UE_LOGFMTでは型付けされてシリアライズされるのでこれが解決されています。
+UE_LOGFMTでは型付けされてシリアライズされることによりこの不満点が解決されています。
 `FString`も`FName`も直接与えてよいです。
 
 ```cpp
-const FString Str = TEXT("エラーが発生しました");
-UE_LOG(LogTemp, Log, "{0}", Str);
+const FString ErrorMessageStr = TEXT("ストレージが不足しています");
+UE_LOG(LogTemp, Log, "エラーが発生しました {0}", ErrorMessageStr);
 
 const int errorCode = -1;
 UE_LOG(LogTemp, Log, "{0}", FString::Format(TEXT("エラーが発生しました:%d"), errorCode));
@@ -193,7 +202,7 @@ UE_LOG(LogTemp, Log, "{0}", FString::Format(TEXT("エラーが発生しました
 激熱ですねぇ。
 
 ## セキュリティ対応
-### ormat String Vulnerability
+### Format String Vulnerability
 有名なC言語の脆弱性ですが、ユーザー入力の文字列をフォーマット文字列として与えてはいけません。
 ```cpp
 void ParseUserInput(const char* Buffer, int Length)
@@ -225,7 +234,7 @@ void ParseUserInput(const char* Buffer, int Length)
 }
 ```
 
-## フォーマット指定子の指定ミスでクラッシュしない
+### フォーマット指定子の指定ミスでクラッシュしない
 `%s`にint を与えたり, `%d`に文字列を与えたりすると undefined behaviourで爆発します。
 
 `UE_LOGFMT`ではそもそもフォーマット指定子を使わないので間違えません。
@@ -278,16 +287,23 @@ UE_LOGFMT(LogTemp, Log, "{0} {1}", 1);
 * FRotator
 * FTransform
 * FBox
+* ...
 
-ToString() や ToCompactString() 等を使います。
+```cpp: コンパイルエラー
+void Test()
+{
+	// コンパイルエラー!
+	FVector Location(1.11, 2.22, 3.33);
+	UE_LOGFMT(LogTemp, Log, "Position:{Pos}", Location);
+}
+```
+
+これらは`ToString()` や `ToCompactString()` 等を使ってしのぎます。
 
 ```cpp
 void Test()
 {
-	FVector Location(1.11,2.22,3.33);
-	// コンパイルエラー!
-	// UE_LOGFMT(LogTemp, Log, "Position:{Pos}", Location);
-
+	FVector Location(1.11, 2.22, 3.33);
 	// Position:X=1.110 Y=2.220 Z=3.330
 	UE_LOGFMT(LogTemp, Log, "Position:{Pos}", Location.ToString());
 
@@ -301,20 +317,23 @@ void Test()
 
 # カスタム型を UE_LOGFMT対応させる
 
-本題です。ユーザー定義のclass/struct を UE_LOGFMTに対応させることができます。
+本題です。`UE_LOGFMT`ではユーザー定義のclass/struct を UE_LOGFMTに対応させることができます。
 
-Serialize関数を定義するだけなのですが、その実装方法がよくわかりません。
-ここでまとめました。
+Serialize関数を定義するだけなのですが、その実装方法がよくわかりませんでしたので、本稿でまとめました。
 
 ユーザー型はなんでもよいのですが、いくつか例示します。
+
+## 例1: Vec3型
+FVectorが非対応なのでオレオレVec3を構造化ログ対応してみます。
+
 ```cpp: MyVec3.h
 class FCbWriter;
 
 struct FMyVec3
 {
-    float X;
-    float Y;
-    float Z;
+    float X = 0;
+    float Y = 0;
+    float Z = 0;
 
     friend void SerializeForLog(FCbWriter& Writer, const FMyVec3& Vec3)
 }
@@ -341,15 +360,15 @@ UE_LOGFMT(LogTemp, Log, "{0}", Vec);
 // {"X":2, "Y":3, "Z":4}
 ```
 
-## 応用編
+## 例2: カスタム型をもつカスタム型
 さらにカスタム型をもつカスタム型をUE_LOGFMTに対応させてみましょう。
 
 ```cpp: Locator.h
 // 位置と向きのみを持つロケータを表す構造体
 struct FLocator
 {
-    FMyVec3 Position;
-    FMyVec3 Forward;
+    FMyVec3 Position{};
+    FMyVec3 Forward{};
 
     friend FCbWriter SerializeForLog(FCbWriter& Writer, const FLocator& Locator)
 }
@@ -367,7 +386,21 @@ FCbWriter SerializeForLog(FCbWriter& Writer, const FLocator& Locator)
 
 所有するメンバ型が`FCbWriter`に対応しているなら、そのまま委譲するだけでよいです。
 
-## 応用編 ValueObjectパターン
+ちなみに サンプルの多様性のため`operator<<` を使用してみましたが、
+`Writer::AddField`でもいいです。どっちも同じです。
+
+```cpp: Locator.cpp
+FCbWriter SerializeForLog(FCbWriter& Writer, const FLocator& Locator)
+{
+    Writer.BeginObject();
+    Writer.AddField(ANSITEXTVIEW("Position"), Locator.Position);
+    Writer.AddField(ANSITEXTVIEW("Forward"), Locator.Forward);
+    Writer.EndObject();
+}
+```
+
+
+## 例3: ValueObjectパターン
 値オブジェクトは意味次第ではログ対応すると嬉しいです。
 
 ```cpp: .h
@@ -380,9 +413,6 @@ struct MYMODULE_API FAngleDegree
 
     // UE_LOGFMT対応のためのFCbWriter用シリアライズ関数
     friend void SerializeForLog(FCbWriter& Writer, const FAngleDegree& Angle);
-	
-	// UE_LOGFMT対応のためのFCbWriter用シリアライズ関数
-	friend FCbWriter& operator<<(FCbWriter& Writer, const FAngleDegree& Angle);
 }
 ```
 
@@ -394,7 +424,7 @@ void SerializeForLog(FCbWriter& Writer, const FAngleDegree& Angle)
 {
    	Writer.BeginObject();
 	Writer.AddFloat(ANSITEXTVIEW("degree"), Angle.Value);
-	Writer.EndObject();;
+	Writer.EndObject();
 }
 
 void Test()
@@ -431,7 +461,9 @@ UE_LOGFMT(LogTemp, Log "{0}", FCurrencyYen(123));
 // {"Currency": ￥123}
 ```
 
-## 応用編 enum対応
+システム層で勝手に補助単位文字を付与するべきでないので、例として微妙だったかもしれません。
+
+## 例4： enum対応
 `UE_LOGFMT` は enum classにも対応しています。
 
 ```cpp: enum.h
@@ -467,7 +499,7 @@ void Test()
     // 「エラーが発生しました. エラーコード=EMyErrorCode::Failed_InvalidParameter」と表示される
 }
 ```
-enumをログ出力するとき、数値にするか文字列にするか悩ましいところですが。
+enumをログ出力するとき、数値にするか文字列にするか悩ましいところですが、設計してください。
 
 
 ## その他応用事例
@@ -495,28 +527,31 @@ FCbWriter Serialize(FCbWriter& Writer, const FKillRecord& KillRecord)
     Writer.AddName(ANSITEXTVIEW("Victim"), KillRecord.VictimName);
     Writer.AddName(ANSITEXTVIEW("Weapon"), KillRecord.WeaponName);
     Writer.EndObject();
-    // {Insitgator: 太郎, Victim: 次郎, Weapon: ショットガン}
+    // {Insitgator: アリス, Victim: ボブ, Weapon: ショットガン}
 }
 ```
 
 # 詳解
-`UE_LOGFMT` は `template関数`と `constexpr`および `concept` を駆使したかなりハイカラな実装になっています。
-型付けされた関数オーバーロードを適切に呼び出すために、template関数をつかってシリアライズ関数の呼び出しを試みています。
+`UE_LOGFMT` は `template関数`と `constexpr`および `concept` を駆使したかなりハイカラな実装になっています。型付けされた関数オーバーロードを適切に呼び出すために、template関数をつかってシリアライズ関数の呼び出しを試みています。
 [ADL:Argument-Dependent Lookup](https://en.cppreference.com/w/cpp/language/adl.html)による解決がなされることを期待しているのです。
 
 ```cpp
 template<T>
 void Write(FCbWriter& Writer, const void* Value)
 {
+    // void SerializeForLog(FCbWriter&, const T&) という関数呼び出し
     SerializeForLog(Writer, *(const T*)Value);
 }
 ```
 
-そのため、適切にリンクできる部分にシリアライズ関数が定義されていればそれを使うように解決されます。
+ADLでは SerializeForLog関数に最もマッチするシグネチャをもつ関数を探しにいきます。
+適切にリンクできる部分に定義されていればそれを使うように解決されます。
 
 `FCbWriter`こと"`Compact Binary Writer`"がコア実装です。`FCbWriter`側でプリミティブ型や`FName`などの著名なUE組み込み型のサポートが実装されています。
 
-SerializeForLogと operator<< はどちらか片方が実装されていればよいです。 ADLがある方を見つけてくれます。
+`SerializeForLog`と `operator<<` はどちらか片方が実装されていればよいです。 ADLがある方を見つけてくれます。両方実装してもいいですが、先に見つかる `SerializeForLog`が優先されるようです。
+完全に同じ意味を持つ関数を２つ実装するのはDRY原則違反なので、片方でよいでしょう。
+
 値渡しでも参照渡しでもどちらでもよいです。カスタム型の特性に応じて参照渡しにするもよし、値渡しにしてもよいです。
 迷ったら 参照渡しでよいと思います。
 
@@ -527,11 +562,14 @@ SerializeForLogと operator<< はどちらか片方が実装されていれば�
 * `FCbWriter& operator<<(FCbWriter& Writer, const T& Value);`
 
 実装も `Writer.Add**` のメソッドを呼ぶか `operator<<`で繋いでいくかは自由です。
-しいて選ぶならば、 `FCbWriter::Add**` の方が呼び出し側で型を指定できるため小回りは聞きます。
+しいて選ぶならば、 `FCbWriter::Add**` の方が呼び出し側で型を指定できるため小回りが利きそうです。
+
+特にBPがuint32を扱えないために泣く泣くint32で扱っている箇所で便利そうな匂いがします。
 
 ## FCbWriter::BeginObject
-こちらは JsonObjectのようなもので、構造化ログへのエントリに、オブジェクトとして追加するかどうかを決めます。
+こちらは構造化ログへのエントリに、オブジェクトとして追加するかどうかを決めます。JsonObjectのようなものと理解しています。
 
+### オブジェクトとして登録
 ```cpp: オブジェクトとして扱う場合
 void SerializeForLog(FCbWriter& Writer, const FHoge& Value)
 {
@@ -541,19 +579,27 @@ void SerializeForLog(FCbWriter& Writer, const FHoge& Value)
 }
 ```
 
-値として扱う場合はフィールド名を指定せずに直接値を入れます。一回のみいれられます。
+### 値として登録
+オブジェクトではなく、値として扱う場合はフィールド名を指定せずに直接値を入れます。一回のみいれられます。
 ```cpp: 値として扱う場合
 void SerializeForLog(FCbWriter& Writer, const FHoge& Value)
 {    
     Writer.AddInteger(Value.IntValue);
 }
+```
 
-// ダメな例
+```cpp: ダメな例
 void SerializeForLog(FCbWriter& Writer, const FHoge& Value)
 {    
     // これはダメ。フィールドが複数あるならちゃんとフィールド名を指定しましょう
     Writer.AddInteger(Value.IntValue0);
     Writer.AddInteger(Value.IntValue1);
+
+    // GOOD
+    Writer.BeginObject();
+    Writer.AddInteger(ANSITEXTVIEW("IntValue0"), Value.IntValue0);
+    Writer.AddInteger(ANSITEXTVIEW("IntValue1"), Value.IntValue0);
+    Writer.EndObject()
 }
 ```
 
@@ -561,10 +607,12 @@ void SerializeForLog(FCbWriter& Writer, const FHoge& Value)
 
 一方で、ログの集計しやすさや読みやすさからオブジェクトとしてシリアライズして、`{フィード名:値}` のようにjsonライクなシリアライズが適切な場合もあります。
 
-結局のところ、構造化ログは集計しやすさのために構造化しているのだから、録ったログの使い道からシリアライズ方法を選ぶのがいいのかなーと思いました。
+結局のところ、構造化ログは集計しやすさのために構造化しているのだから、録ったログの使い道からシリアライズ方法を選ぶのがええんではないでしょうか。
 
 ## まとめ
 
+* `UE_LOGFMT`すごく良い
 * `UE_LOG`はフォーマット指定子の指定ミスが怖いから `UE_LOGFMT`使った方がいい
 * 値の精度が問題になる場合は `ToString`や`ToCompactString` を検討すること
-* Agentic Codingの時代になるのだから、AIが生成したフォーマットから`%s`と`%d`をコードレビューするのは無理。見落とす。
+* AIが生成したフォーマットから`%s`と`%d`をコードレビューするのは無理。見落とす
+* CLAUDE.md や copilot-instructions.md に `UE_LOGFMT`を使うよう指示すると幸せ
