@@ -261,7 +261,7 @@ TEST_METHOD(ObjectInitailize)
 
     std::ignore = Assert.AreEqual(Obj.Value, 3);
     std::ignore = Assert.AreEqual(Obj.Count, 2);
-	std::ignore = Assert.IsTrue(Obj.IsValid(), TEXT("この検査も続けて実行される"));
+    std::ignore = Assert.IsTrue(Obj.IsValid(), TEXT("この検査も続けて実行される"));
 
     // 必ずここまでくる
     // TestRunnerの中に記録が保持されているので、このテストメソッドを抜けたらエラー報告される
