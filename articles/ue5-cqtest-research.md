@@ -10,18 +10,17 @@ published: true
 本稿は`CQTest`プラグインを褒めちぎる記事です。`CQTest`は既存のUEテストフレームワークの弱点を克服しており、実用可能なレベルですごく良いものだ、という話です。
 
 
-UE5 で C++ のテストを書くときは、Simpleテストを使うことが多いと思います。`IMPLEMENT_SIMPLE_AUTOMATION_TEST` これね。しかしながら、シンプルテストは、fixture がないし、フレームをまたぐテストを書こうとすると大変です。特にダメなのが、ActorやComponent のテストがほとんどできないという点です。Componentなどの標準ライフサイクルをテスト環境で再現できず、めちゃ苦労します。
-実質的にpure-C++クラスやUEに依存しない論理部しかテストできず、エンジンが提供するテストフレームワークなのに全然エンジン統合がなっていませんでした。
+UE5 で C++ のテストを書くときは、Simpleテストを使うことが多いと思います。`IMPLEMENT_SIMPLE_AUTOMATION_TEST` これね。しかしながら、シンプルテストは、fixture がないし、フレームをまたぐテストを書こうとすると大変です。特にダメなのが、ActorやComponent のテストがほとんどできないという点です。Componentなどの標準ライフサイクルをテスト環境で再現できず、めちゃ苦労します。実質的にpure-C++クラスやUEに依存しない論理部しかテストでません。エンジンが提供するテストフレームワークなのに全然エンジン統合がなっていませんでした。
 
-UEには SIMPLE/COMPLEX/Spec/FunctionalTestなどなど様々なテスト系機能が搭載されているのですが、イマイチ芯を外したものばかりでございました。
-UEはC++なので、`CATCH2`や`GOOGLE TEST`など巷で有名なC++テストフレームワークを使えます。実際 `CATCH2`は起動が速くて好き。とはいえ、Unreal Automationフレームワークに乗っかることが重要なので、Simpleテストが総合的に一番マシ、時点でSpecという状況でした。
+UEには `SIMPLE`/`COMPLEX`/`Spec`/`FunctionalTest`などなど様々なテスト系機能が搭載されているのですが、イマイチ芯を外したものばかりでございました。UEはC++なので、`CATCH2`や`GOOGLE TEST`など巷で有名なC++テストフレームワークを使えます。実際 `CATCH2`は起動が速くて好き。とはいえ、Unreal Automationフレームワークに乗っかることが重要なので、Simpleテストが総合的に一番マシ、時点でSpecという状況でした。
 
-そこで**CQTest** (Code Quality Tests)の登場でございます。
-`CQTest`は xUnit スタイルの fixtureをサポートし、メソッドチェーンでフレーム跨ぎの処理を書けて、さらに PIE を複数立てるネットワークテストまで付いてきます。これぞ顧客が求めていたものです。最高かよ。
+そこで **CQTest** (Code Quality Tests)の登場でございます。
+`CQTest`は fixtureをサポートし、メソッドチェーンでフレーム跨ぎの処理を書けて、さらに PIE を複数立てるネットワークテストまで付いてきます。これぞ顧客が求めていたものです。最高かよ。
 
 UE5.3 から導入され、UE5.5 でエンジンモジュールに格上げされました。本体は `Engine/Source/Developer/CQTest` にあります。プラグイン側 (`Engine/Plugins/Tests/CQTest`) に残っているのはフレームワーク自身のテスト(`CQTestTests`)だけなので不要です。罠です。
 
-我々はテストを置くモジュールの Build.cs に `"CQTest"` を足すだけでいいです。セットアップできました。
+## セットアップ
+テストを置くモジュールの Build.cs に `"CQTest"` を足すだけでいいです。セットアップできました。
 
 ```cs: MyGame.Build.cs
 // AutomationTestFramework使うときのフラグ
@@ -39,6 +38,9 @@ if (Target.WithAutomationTests)
     }
 }
 ```
+
+テスト専用モジュールを用意してもいいですが、export API するのが面倒なのでプロダクトモジュールにテストコードを含めても問題ありません。どうせ`#if WITH_AUTOMATION_TESTS` で括るからです。ガードすればパッケージに含まれません。
+
 ## 使い方サンプル
 
 テストコードは.cpp単体でOKです。
@@ -196,9 +198,9 @@ Gauntletに至ってはテストフレームワークではなくて、自動Tes
 
 ## CQTestの優れているところ
 
-ここからは、「僕から見た君の素敵だと思うところ」を述べていきます。口説き文句が続きます。
+ここからは僕から見た君の素敵だと思うところを述べていきます。
 
-### fixture がテストごとに作り直されて嬉しい
+### fixture
 
 `TEST_CLASS` で TestFixtureを作成します。この fixture インスタンスはテストメソッドの実行ごとに new され、終わったら破棄されます。前のテストの状態が次のテストに残りません。従来のテストで状態を持とうとすると その状態をきちんと自前で初期化・解放する手間がありました。`TUniquePtr`を使ってもいいのです。
 
@@ -230,7 +232,7 @@ TEST_CLASS(FMｙFeatureTest, "tag")
 C#のnUnitや UnityTestと同じような書き味で実装できるという感じです。
 ```
 
-### AssertThat で失敗したらそこで止まって嬉しい
+### AssertThat
 
 `Assert.That` が使えると言われたら嬉しいでしょ？わかるこの気持ち？
 
@@ -269,9 +271,10 @@ TEST_METHOD(ObjectInitailize)
 ```
 
 
-### latent command がチェーンで書けて嬉しい
+### メソッドチェーン
 
-CQTest では fixture が最初から `TestCommandBuilder` を持っていて、こう書けます。とってもフルーエント！
+fixture が最初から `TestCommandBuilder` を持っていて、こう書けます。
+とってもフルーエント！
 
 ```cpp
 TestCommandBuilder
@@ -282,24 +285,25 @@ TestCommandBuilder
 
 このチェーンには便利な挙動が仕込まれています。
 
-- `Until` は毎フレーム述語を評価し、**タイムアウトすると `AddError` で失敗になる**(既定 10 秒、後述の CVar で変更可)。条件が満たされないままテストがハングして CI を巻き込む、という事故が起きない
-- どこかのステップでエラーが出ると、**残りのステップは自動でスキップ**される
-- `OnTearDown` に積んだ後始末は **テストが失敗していても LIFO 順で実行**される
+- `Until` は毎フレーム述語を評価し、タイムアウトすると `AddError` で失敗になる
+- エラーが出ると、残りのステップは自動でスキップされる
+- `OnTearDown` に積んだ後始末はテストが失敗していても LIFO 順で実行される
 
-従来はフレームをまたぐたびに `DEFINE_LATENT_AUTOMATION_COMMAND_ONE_PARAMETER` でクラスを 1 個定義して `ADD_LATENT_AUTOMATION_COMMAND` で積んでいました。
+### デストラクタ
 
-### 後始末が保証されて嬉しい
+fixtureのデストラクタ呼ばれます。Scopedテクニックを使ったRAIIが使えます。
+Actor/Component もちゃんと UnRegister/ Destroyされます。
 
-デストラクタ呼ばれます。Actor/Component もちゃんと UnRegister/ Destroyされます。
-UObjectはGC回収されます。RAIIが使えます。
+UObjectはGC回収されます。
+各テストの前に `DelayGarbageCollection()`にで1フレ延命されて、テスト終了後に`ForceGarbageCollection()` で回収されます。後述の `FActorTestSpawner`は、生成した Actor / World をデストラクタで破棄します。
 
-各テストの前に `GEngine->DelayGarbageCollection()`、終了後に fixture 破棄と `ForceGarbageCollection()` が自動で走ります。後述の FActorTestSpawnerは、生成した Actor / World をデストラクタで破棄します。
 テスト実行のたびにメモリがリークする心配は大きく減りました。
 
-### World/Spawnerが用意されて嬉しい
+### TestWorldとSpawner
 
-素の Automation Framework には「Test用のUWorld をどう用意するか」「マップをどうロードするか」が用意されておりませんでした？（なんでなかったん？）
-どこのご家庭も独自のヘルパーを実装してTestWorldを構築してきたことでしょう。CQTest でようやく搭載されました。
+CQTest でようやく搭載されました。
+素の Automation Framework にはTest用のUWorld をどう用意するか、マップをどうロードするかが用意されておりませんでした？
+（なんでなかったん？）
 
 | コンポーネント | 用途 |
 |---|---|
@@ -309,7 +313,7 @@ UObjectはGC回収されます。RAIIが使えます。
 | `FCQTestSlateComponent` | Slate の tick 経過を待つ |
 | `CQTestAssetHelper` | AssetRegistry 検索、Blueprint クラスの取得 |
 
-特にネットワークテストは、FPIENetworkComponentを使った方がいいでしょう。`NetTestHelpers.h`自体はCQTest以外でも使えるのでしょうがね。
+特にネットワークテストは、`FPIENetworkComponent`を使った方がいいでしょう。
 
 ## 基本的な使い方
 
@@ -328,9 +332,9 @@ TEST(LerpHalf_ReturnsMidpoint, "Game.Math")
 }
 ```
 
-関数スコープで完結するテストならこれでいいと思います。SIMPLEテスト使ってもいいんですが、使い分ける認知負荷を下げたい。
+関数スコープで完結するテストならこれ。SIMPLEテストを使う必要ありません。
 
-### fixture
+### fixtureの使い方
 
 本命。`BEFORE_EACH` / `AFTER_EACH` は各メソッドの前後で呼ばれ、メンバ変数はメソッドごとに独立します。
 
@@ -662,19 +666,15 @@ TEST_CLASS_WITH_FLAGS(FBossArenaTest, "Game.Boss",
 ```
 マップを使ったテストはかなりフレーキーになります。なぜならマップ内に何を配置しているか？に大きく依存するからです。ソースコードとテストマップを1:1対応させるのがいいと思います。
 
-製品用マップをテストするには向いていません。なぜならば、すぐ仕様変更されるからです。Bossとしては1つだけど、双子のボスでBossキャラが2体いたら上のテストはfailするよね、とか。
-仕様追加や変更のたびにソースコードも一緒に修正しないといけないとなると面倒くさいです。
-そちらは自動テスト側の検討事項となるでしょう。
-
-Coding AIにUE MCP使って操作させるなら問題にならないかもしれません。
+製品用マップをテストするには向いていません。なぜならば、すぐ仕様変更されるからです。Bossとしては1つだけど、双子のボスでBossキャラが2体いたら上のテストはfailするよね、とか。仕様追加や変更のたびにソースコードも一緒に修正しないといけないとなると面倒くさいです。
+そちらは自動テスト側の検討事項となるでしょう。Coding AIにUE MCP使って操作させるなら問題にならないかもしれません。
 
 
-テスト専用の空マップでよければ `FMapTestSpawner::CreateFromTempLevel(TestCommandBuilder)` が一時レベルを作ってくれます (エディタ限定)。
+テスト専用の空マップでよければ `FMapTestSpawner::CreateFromTempLevel` が一時レベルを作ってくれます。
 
-PIE テストを CI で連続実行するときの注意。
+### PIE テストの連続実行
 
-**PIE は自前で畳む。** `FMapTestSpawner` を破棄しても PIE セッション自体は終わりません(!?)。放置すると world とレンダーリソースが後続のテストへ持ち越されてしまうので、`AFTER_EACH` で明示的に終了させます。
-あまりに罠すぎるので気を付けてください。
+PIE は自前で畳む必要があります。 `FMapTestSpawner` を破棄しても PIE セッション自体は終わりません(!?)。放置すると world とレンダーリソースが後続のテストへ持ち越されてしまうので、`AFTER_EACH` で明示的に終了させます。あまりに罠すぎるので気を付けてください。
 ```cpp
 AFTER_EACH()
 {
@@ -690,9 +690,7 @@ AFTER_EACH()
 ### GPUを使うテスト
 レンダリング依存のテストは実行環境を選べるようにします。
 
-GPU が要るテストはフラグに `EAutomationTestFlags::NonNullRHI` を足したうえで、テスト冒頭で `FApp::CanEverRender()` を見て、 `-nullrhi` の インスタンスでは早期 return しておくとよいです。 ヘッドレス CI と GPU 付き CI で同じテストバイナリを共有できます。これがないと、ヘッドレストでテストスイートを全件実行したときにRedになってしまいます。
-
-ComputeShader とか、Nanite周りとか、RHIが必須のテストは面倒くさいってことです。
+GPU が要るテストはフラグに `EAutomationTestFlags::NonNullRHI` を足します。テスト冒頭で `FApp::CanEverRender()` を見て、 `-nullrhi` の インスタンスでは早期 return しておくとよいです。 ヘッドレス CI と GPU 付き CI で同じテストバイナリを共有できます。これがないと、ヘッドレストでテストスイートを全件実行したときにRedになってしまいます。
 
 
 ### ネットワークテスト (FPIENetworkComponent)
@@ -837,7 +835,7 @@ BEFORE_EACH()
     Env = UCQTestSettings::SetTestClassTimeouts(FTimespan::FromSeconds(120));
 ```
 
-(そんな長いテストを作るんじゃねぇ、というのはその通り）
+そんな長いテストを作るんじゃねぇ、というのはその通り。
 
 ### テストタグ
 
@@ -858,39 +856,6 @@ TEST_CLASS_WITH_TAGS(FNightlyInventoryTest, "Game.Inventory", "[Nightly][Invento
 ---
 ## CQTestの罠
 
-### fixture のコンストラクタはエンジン起動時にも走る
-テスト登録のために、起動時に各 fixture が 1 回インスタンス化されます。このときは `bInitializing` が true になっているので、コンストラクタで重い処理やアセットアクセスをするなら必ずこれを見て分岐してください。メンバ初期化子で重い処理を書くと、エディタ起動が遅くなる恐れがあります。初期化は素直に `BEFORE_EACH` に書くのが安全です。
-
-```cpp
-struct FSuperHeavyValue
-{
-    FSuperHeavyValue()
-    {
-        // めっちゃ重たい処理
-        Sleep(1000);
-    }
-}
-
-TEST_CLASS(FHeavyTest, "...")
-{
-    FHeavyTest()
-    {
-        if(bInitializing)
-        {
-            //Test Frameworkの初期化中らしい
-            return;
-        }
-
-        // 重たい初期化
-        Sleep(1000);
-    }
-
-    // このFSuperHeavyValueのコンストラクタ内でとんでもない処理していると
-    // 結局めっちゃ遅くなるので注意!
-    FSuperHeavyValue Value{};
-}
-```
-
 ### TestCommandBuilderのOnTearDown怪しい
 TestCommandBuilderのOnTearDownはエラー発生前の登録済みの後始末だけ実行されます。
 コマンドビルド前に`UE_Log(ERROR)`などのエラーが発生していたら呼ばれません。
@@ -908,10 +873,7 @@ TestCommandBuilder.OnTearDown([]()
 AFTER_EACHやデストラクタの方が信頼できます。
 :::
 
-### FActorTestSpawnerは World::BeginPlay呼ばない
-AActor::DispatchBeginPlayを呼ぶ必要ありそう？
-
-### SmokeTestに気を付けろ
+### SmokeTestに気を付ける
 :::message
 CQTestに限りませんが、Smoke フィルタにするとスモークテストになります。スモークテストはUEエディタ起動時に毎回必ず実行されるという仕様（罠）があります。
 :::
@@ -925,85 +887,6 @@ CIでスモークテストを実行するのは賛成ですが、普段の業務
 逆に実機でのスモークテストは既定で一切走りません。DevelopmentのPackageを作ったうえ、.iniに`bForceSmokeTests=true`または `-bForceSmokeTests`を追加する必要があります。
 TestConfigurationならば、さらにbForceCompileDevelopmentAutomationTests を指定する必要があります。
 こんなに苦労するぐらいならスモークテストやっぱ使わない方がよくないですか？
-
-### マクロに気を付けろ
-C++マクロの悪いところ出てます。
-※UE5.8.1で確認。
-
-```cpp
-if( bCondition) ASSERT_FAIL(...);
-
-// ここには来ない
-DoFooBar();
-```
-
-これは展開すると以下のようになります。
-```cpp
-if( bCondition)
-    this->Assert.Fail(...);
-return;
-
-//ここには来ない
-DoFooBar();
-```
-古典的なブレースなしif文とマクロのバグなので、ちゃんと{}を使いましょう。
-
-```cpp
-if(bCondition){ ASSERT_FAIL(...); }
-
-// OK
-DoFooBar();
-```
-
-釈迦に説法ですが、補足します。
-
-`{}`なしのif文は次の1つのstatementだけをtrue-branchとして扱います。
-よって、`if() GetInstance().GetFoo().DoBar(); return;` は
-```cpp
-if(){ GetInstance().GetFoo().DoBar(); }
-return;
-```
-
-として解釈されます。`if`とマクロを組み合わせると意図せぬコードになってしまうというバグです。このバグは多くのプログラマを苦しめたため、if文には`{}`をつけろという[コーディング規約](https://www.jpcert.or.jp/sc-rules/c-exp19-c.html)が普及しました。Epicのコーディング規約は`{}`を付けるようになっているため、この罠は発動しないはずです。
-
-[PRE10-C. 複数の文からなるマクロは do-while ループで包む](https://www.jpcert.or.jp/sc-rules/c-pre10-c.html)
-
-
-## CQTestのイケてないところ
-
-### 日本語テスト名が文字化けする
-cppはマルチバイト文字に対応しているので合法です。コンパイルできます。ただし、UnrealFrontend上で文字化けします。ログもターミナルの環境によっては化けるかもしれません。英語がいんじゃないかな。
-
-テスト名には機能や仕様を書け、と言われますね。日本語が使えるんだけどログから読めなくなる危険があるのであんまり使えません。
-```cpp
-// 合法だけど文字化けするかも
-TEST_CLASS(Fリクエストキューイング機能Test,"Tag")
-{
-    TEST_METHOD(バッファ溢れはfalseを返す){}
-    TEST_METHOD(MPSCでスレッドセーフ){}
-    TEST_METHOD(リクエストのキャンセル){}
-}
-```
-
-### パラメタライズテストがない
-`TEST_METHOD` はコンパイル時列挙で、COMPLEX テストの `GetTests()` のような実行時のケース生成に相当する仕組みがありません。データ駆動でケースを増やしたければ 1 メソッド内でループを回すことになり、Session Frontend 上では 1 件として扱われます。テストデータを自前で用意して、どのデータで落ちたかは失敗メッセージに自分で入れることになります。
-
-### latent の中から latent を積めない
-未サポート (「Adding latent actions from within latent actions is currently unsupported」)
-
-### ASSERT_THAT は関数スコープを越えない
-実体が `return` なので、ヘルパー関数やラムダ式に切り出すとヘルパーから抜けるだけになります。そのラムダの残りは中断されますが同じ意味論ではありません (エラー自体は記録されるので、後続の latent ステップはスキップされます)。GoogleTest の `EXPECT_*` に相当する「失敗を記録して続行」する機能もありません。
-
-### ネットワークテストはエディタ限定
-`ENABLE_PIE_NETWORK_TEST` は `WITH_EDITOR` を含むので、`NETWORK_TEST_CLASS` はパッケージ済みビルドでは存在しません。実機・実プロセス間のネットワークテストは Gauntlet の領分です。
-
-### エンジン起動なしの高速実行はできない
-テストはエディタまたはゲームプロセスの中で走ります。エンジン起動が遅くて高速ユニットテストは不可能です。コミットフックなども危険でしょう。
-
-Catch2 ベースの Low-Level Tests はエンジン起動しないので速いです。こちらな高速ユニットテストも可能かもしれません。
-
-### C++ 専用
-Blueprint からは書けません。BPerは Functional Test 使え。
 
 ## 実際に使った所感
 
